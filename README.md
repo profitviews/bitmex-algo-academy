@@ -1,1 +1,1 @@
-# algo-academy
+# BitMEX Algo Academy
