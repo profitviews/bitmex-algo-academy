@@ -52,7 +52,7 @@ class Trading(Link):
 					'grid_size': 400000,
 					'candles': {},
 					'tob': (np.nan, np.nan),
-					'max_risk': 400000,
+					'max_risk': 4000000,
 					'current_risk': 0,
 					'price_precision': 0.5,
 					'price_decimals': 1,
@@ -129,7 +129,7 @@ class Trading(Link):
 					'grid_size': 500000,
 					'candles': {},
 					'tob': (np.nan, np.nan),
-					'max_risk': 5000000,
+					'max_risk': 10000000,
 					'current_risk': 0,
 					'price_precision': 0.1,
 					'price_decimals': 1,
@@ -142,7 +142,7 @@ class Trading(Link):
 					'grid_size': 200000,
 					'candles': {},
 					'tob': (np.nan, np.nan),
-					'max_risk': 250000,
+					'max_risk': 2000000,
 					'current_risk': 0,
 					'price_precision': 0.05,
 					'price_decimals': 2,
@@ -171,50 +171,6 @@ class Trading(Link):
 					'price_precision': 0.5,
 					'price_decimals': 1,
 					'direction': 'LONG'
-				},
-				'XBTZ23' : {
-					'sym': 'XBTZ23',
-					'grid_size': 400,
-					'candles': {},
-					'tob': (np.nan, np.nan),
-					'max_risk': 50000,
-					'current_risk': 0,
-					'price_precision': 0.5,
-					'price_decimals': 1,
-					'direction': 'LONG'
-				},
-				'ETHUSD' : {
-					'sym': 'ETHUSD',
-					'grid_size': 100,
-					'candles': {},
-					'tob': (np.nan, np.nan),
-					'max_risk': 0,
-					'current_risk': 0,
-					'price_precision': 0.05,
-					'price_decimals': 2,
-					'direction': 'FLAT'
-				},
-				'LINKUSD' : {
-					'sym': 'LINKUSD',
-					'grid_size': 200,
-					'candles': {},
-					'tob': (np.nan, np.nan),
-					'max_risk': 0,
-					'current_risk': 0,
-					'price_precision': 0.001,
-					'price_decimals': 3,
-					'direction': 'FLAT'
-				},
-				'XRPUSD': {
-					'sym': 'XRPUSD',
-					'grid_size': 100,
-					'candles': {},
-					'tob': (np.nan, np.nan),
-					'max_risk': 0,
-					'current_risk': 0,
-					'price_precision': 0.0001,
-					'price_decimals': 4,
-					'direction': 'FLAT'
 				}
 			}
 		}
@@ -283,8 +239,8 @@ class Trading(Link):
 		#}))
 
 		orders = {
-			'bids': [np.min([tob_bid, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (40, 30, 20, 10)],
-			'asks': [np.max([tob_ask, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (60, 70, 80, 90)]
+			'bids': [np.min([tob_bid, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (40, 30, 20)],
+			'asks': [np.max([tob_ask, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (60, 70, 80)]
 		}
 		orders['bids'] = self.remove_duplicates(orders['bids'])
 		orders['asks'] = self.remove_duplicates(orders['asks'])
