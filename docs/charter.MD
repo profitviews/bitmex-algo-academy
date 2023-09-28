@@ -52,6 +52,19 @@ To facilitate the growth and development of our members, loans may be granted fr
 
 Funds may be allocated for marketing and promotional activities aimed at expanding Algo Academy's membership base and enhancing our visibility in the algorithmic trading community. Such initiatives shall be subject to approval by the guild leadership.
 
+### Section 5: Advanced Notice of Distribution
+
+- **Notice of Changes**: The guild leadership will give 3 days notice of changes to the distribution mechanism via Discord.
+
+- **Bespoke Distribution**: Due to the BitMEX guild functionality limitations, if there is a bespoke distribution for the week, all funds will be withdrawn by the guild master, and then the excess will be redeposited back into the guild. Bespoke distribution will be itemized in the #guild-pot-distribution channel at least 3 days before distribution.
+
+### Section 6: Members Requesting Distribution
+
+- **Request Proposal**: Members who wish to request a distribution must propose it in the #guild-pot-distribution channel at least 1 week before the intended distribution date.
+
+- **Approval Process**: Guild leadership will review and approve or deny distribution requests based on members' preferences and the guild's financial policies.
+
+
 ## Article III: Guild Leadership
 
 The guild leadership, including but not limited to the Guild Master and admins, shall be responsible for overseeing the responsible use of guild funds, setting trading strategies, and ensuring the alignment of guild activities with the values outlined in this charter.
