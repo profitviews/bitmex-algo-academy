@@ -186,7 +186,7 @@ class Trading(Link):
 				params={
 					'symbol': 'XBTUSDT',
 					'side': 'Sell',
-					'orderQty': self.XBTUSDT['grid_size'],
+					'orderQty': self.XBTUSDT['order_size'],
 					'price': tob_ask,
 					'ordType': 'Limit',
 					'execInst': 'ParticipateDoNotInitiate',
