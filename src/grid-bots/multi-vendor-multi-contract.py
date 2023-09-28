@@ -1,4 +1,4 @@
-# 2023-09-28 12:39:26
+# 2023-09-28 12:57:28
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items
 
@@ -16,7 +16,6 @@ import time
 
 class Trading(Link):
   UPDATE_SECONDS = 60
-  MULTIPLIER = 1
   SHUT_IT_DOWN = False
   GRACEFUL_SHUTDOWN = True
   GRID_BIDS = (40, 30, 20)
@@ -33,7 +32,8 @@ class Trading(Link):
           'current_risk': 0,
           'price_precision': 0.5,
           'price_decimals': 1,
-          'direction': 'FLAT'
+          'direction': 'FLAT',
+          'multiplier': '1',
         },
         'XBTUSD' : {
           'sym': 'XBTUSD',
@@ -271,7 +271,7 @@ class Trading(Link):
             # If I have a current open position in the opposite direction, double the order size
             multiplier = 1
             if(self.VENUES[venue][sym]['current_risk'] <= 0):
-              multiplier = self.MULTIPLIER
+              multiplier = self.VENUES[venue][sym].get('multiplier', 1)
             if(self.VENUES[venue][sym]['direction'] == 'SHORT'):
               execInst = 'ParticipateDoNotInitiate,ReduceOnly'
             else:
@@ -325,7 +325,7 @@ class Trading(Link):
             # If I have a current open position in the opposite direction, double the order size
             multiplier = 1
             if(self.VENUES[venue][sym]['current_risk'] >= 0):
-              multiplier = self.MULTIPLIER
+              multiplier = self.VENUES[venue][sym].get('multiplier', 1)
             if(self.VENUES[venue][sym]['direction'] == 'LONG'):
               execInst = 'ParticipateDoNotInitiate,ReduceOnly'
             else:
