@@ -79,6 +79,4 @@ Algo Academy is proud to collaborate with esteemed partners in the algorithmic t
 
 2. **ProfitView**: ProfitView, a founding member of our guild, is our preferred system for the deployment and operation of our algorithms. Their commitment to our guild's success has been invaluable, and their platform plays a crucial role in our trading strategies and operations.
 
-**In Witness Whereof**, we, the undersigned members of Algo Academy, hereby endorse and ratify this charter on this [Date].
-
 *Note: This guild charter is a living document and may be revised or amended as needed to reflect the evolving needs and priorities of Algo Academy.*
