@@ -44,28 +44,22 @@ class Trading(Link):
         # ALGO PARAMS
         self.src = 'BitMEX'
 		self.venue =  'BitMEX'
-		self.active_usdt_order_id = ''
-		self.active_usdt_order_size = ''
 
 		self.XBTUSDT = {
 			'sym': 'XBTUSDT',
-			'grid_size': 380000,
+			'order_size': 380000,
 			'tob': (np.nan, np.nan),
-			'max_risk': 380000*5,
 			'current_risk': 0,
 			'price_precision': 0.5,
-			'price_decimals': 1,
-			'direction': 'FLAT'
+			'price_decimals': 1
 		}
 		self.XBTUSD = {
 			'sym': 'XBTUSD',
-			'grid_size': 10000,
+			'order_size': 10000,
 			'tob': (np.nan, np.nan),
-			'max_risk': 10000*5,
 			'current_risk': 0,
 			'price_precision': 0.5,
-			'price_decimals': 1,
-			'direction': 'FLAT'
+			'price_decimals': 1
 		}
         self.on_start()
 
@@ -74,11 +68,6 @@ class Trading(Link):
 			self.fetch_current_risk()
 			self.update_limit_orders()
 			time.sleep(2)
-
-	def minutely_update(self):
-		self.fetch_current_risk()
-		self.update_limit_orders()
-        threading.Timer(31 - self.second, self.minutely_update).start()
 
     def fetch_current_risk(self):
 		self.XBTUSDT['current_risk'] = 0
@@ -89,27 +78,10 @@ class Trading(Link):
 			if x['sym'] == 'XBTUSD':
 				self.XBTUSD['current_risk'] = x['pos_size']
 
-	def remove_duplicates(self, arr):
-		unique_items = list(set(arr))
-		return unique_items
+
 
 	def round_value(self, x, tick, decimals=0):
 		return np.round(tick * np.round(x / tick), decimals)
-
-    def orders_intent(self):
-		tob_bid, tob_ask = sym['tob']
-
-		# check if I have a XBTUSDT position, If I do not.
-
-		orders = {
-			'bids': [np.min([tob_bid, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (40, 30, 20)],
-			'asks': [np.max([tob_ask, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in (60, 70, 80)]
-		}
-		orders['bids'] = self.remove_duplicates(orders['bids'])
-		orders['asks'] = self.remove_duplicates(orders['asks'])
-
-		logger.info('sym:' + sym['sym'] + json.dumps(orders))
-		return orders
 
 
 
@@ -117,15 +89,6 @@ class Trading(Link):
 		xbttob_bid, xbttob_ask = self.XBTUSD['tob']
 		usdttob_bid, usdttob_ask = self.XBTUSD['tob']
 		if(np.isnan(usdttob_bid) or np.isnan(usdttob_ask) or np.isnan(xbttob_bid) or np.isnan(xbttob_ask)):
-			return
-
-		# If I have a position that is partially filled. you need to get it fully filled, so just put it to the top of the book
-		if(self.active_usdt_order_id != ''):
-			price = usdttob_ask
-			if(self.active_usdt_order_side == 'Buy'):
-				price = usdttob_bid
-			logger.info('amending order ' + self.active_usdt_order_id + ' to price' + price)
-			self.amend_order(self.venue, order_id=self.active_usdt_order_id, price=price)
 			return
 
 		# check if I have an open position on XBTUSDT and XBTUSD, If I don't have an XBTUSDT position but do have a XBTUSD position, I need to close this XBTUSD position out asap
@@ -139,10 +102,8 @@ class Trading(Link):
 			tob_bid, tob_ask = self.XBTUSD['tob']
 			# check the side
 			side = 'Buy'
-			price = tob_ask
 			if(self.XBTUSD['current_risk'] > 0):
 				side = 'Sell'
-				price = tob_bid
 			self.call_endpoint(
 				self.venue,
 				'order',
@@ -151,7 +112,7 @@ class Trading(Link):
 				params={
 					'symbol': 'XBTUSD',
 					'side': side,
-					'orderQty': self.XBTUSD['grid_size'],
+					'orderQty': abs(self.XBTUSD['current_risk']),
 					'ordType': 'Market',
 					'text': 'Sent from ProfitView.net'
 				}
@@ -171,7 +132,7 @@ class Trading(Link):
 				params={
 					'symbol': 'XBTUSD',
 					'side': side,
-					'orderQty': self.XBTUSD['grid_size'],
+					'orderQty': self.round_value(abs(self.XBTUSDT['current_risk']) / 38, self.XBTUSD['price_precision'], self.XBTUSD['price_decimals']),
 					'ordType': 'Market',
 					'text': 'Sent from ProfitView.net'
 				}
@@ -192,7 +153,7 @@ class Trading(Link):
 				params={
 					'symbol': 'XBTUSDT',
 					'side': side,
-					'orderQty': self.XBTUSDT['grid_size'],
+					'orderQty': abs(self.XBTUSDT['current_risk']),
 					'price': price,
 					'ordType': 'Limit',
 					'execInst': 'ParticipateDoNotInitiate',
@@ -210,7 +171,7 @@ class Trading(Link):
 				params={
 					'symbol': 'XBTUSDT',
 					'side': 'Buy',
-					'orderQty': self.XBTUSDT['grid_size'],
+					'orderQty': self.XBTUSDT['order_size'],
 					'price': tob_bid,
 					'ordType': 'Limit',
 					'execInst': 'ParticipateDoNotInitiate',
@@ -239,11 +200,4 @@ class Trading(Link):
 		if sym == 'XBTUSD':
 			self.XBTUSD['tob'] = (data['bid'][0], data['ask'][0])
 
-	def order_update(self, src, sym, data):
-		if(sym == 'XBTUSDT' and data['remain_size'] > 0 and data['order_size'] != data['remain_size']):
-			self.active_usdt_order_id = data['order_id']
-			self.active_usdt_order_side = data['side']
-		elif(sym == 'XBTUSDT'):
-			self.active_usdt_order_id = ''
-			self.active_usdt_order_side = ''
 
