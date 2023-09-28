@@ -1,4 +1,4 @@
-# 2023-09-27 14:25:01
+# 2023-09-28 12:39:26
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items
 
@@ -234,12 +234,13 @@ class Trading(Link):
         tob_bid, tob_ask =  self.VENUES[venue][sym]['tob']
         if(np.isnan(tob_bid) or np.isnan(tob_ask)):
           continue
-        intent = self.orders_intent(self.VENUES[venue][sym])
-        bids = intent['bids']
-        asks = intent['asks']
 
         #cancel all current orders
         self.cancel_order(venue, sym=sym)
+
+        intent = self.orders_intent(self.VENUES[venue][sym])
+        bids = intent['bids']
+        asks = intent['asks']
 
         # Buy orders
         if (abs(self.VENUES[venue][sym]['current_risk']) <  self.VENUES[venue][sym]['max_risk']) or (self.VENUES[venue][sym]['current_risk'] <= 0):
