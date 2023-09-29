@@ -1,4 +1,4 @@
-# 2023-09-28 12:57:28
+# 2023-09-29 12:24:23
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items
 
@@ -7,146 +7,101 @@ from profitview import Link, http, logger
 import json
 import numpy as np
 import pandas as pd
-import scipy
-import talib
 from scipy.interpolate import interp1d
-from talib import RSI
+from talib import RSI, MACD
 import asyncio
 import time
+
+TIME_LOOKUP = {
+  '1m':  60_000,
+  '5m' : 60_000 * 5,
+  '15m': 60_000 * 15,
+  '1h':  60_000 * 60,
+  '1d':  60_000 * 60 * 24,
+}
+
+# GARCH parameters
+OMEGA = 1.605025e-08
+ALPHA = 0.193613
+BETA = 0.786155
 
 class Trading(Link):
   UPDATE_SECONDS = 60
   SHUT_IT_DOWN = False
   GRACEFUL_SHUTDOWN = True
-  GRID_BIDS = (40, 30, 20)
-  GRID_ASKS = (60, 70, 80)
+  GRID_BIDS = (40, 30, 20) # (40, 30, 20, 10)
+  GRID_ASKS = (60, 70, 80) # (60, 70, 80, 90)
+  LOOKBACK = 150
+  LEVEL = '1m'
   SRC = 'bitmex'                         # exchange name as in the Glossary
   VENUES = {
       'account1': {
         'XBTUSDT' : {
-          'sym': 'XBTUSDT',
-          'grid_size': 400000,                    # min is 1000 == 0.001 XBT
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 400000*10,                  # Means max 10 times the base order size
-          'current_risk': 0,
+          'order_size': 1_000 * 400,
+          'max_risk': 1_000 * 400 * 10,                  # Means max 10 times the base order size
           'price_precision': 0.5,
-          'price_decimals': 1,
+          'size_precision': 1_000,
           'direction': 'FLAT',
-          'multiplier': '1',
+          'multiplier': 1,
         },
         'XBTUSD' : {
-          'sym': 'XBTUSD',
-          'grid_size': 500,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 80000,
-          'current_risk': 0,
+          'order_size': 100 * 5,
+          'max_risk': 100 * 5 * 160,
           'price_precision': 0.5,
-          'price_decimals': 1,
-          'direction': 'FLAT'
-        },
-        'XBTU23' : {
-          'sym': 'XBTU23',
-          'grid_size': 400,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 8000,
-          'current_risk': 0,
-          'price_precision': 0.5,
-          'price_decimals': 1,
-          'direction': 'FLAT'
-        },
-        'XBTZ23' : {
-          'sym': 'XBTZ23',
-          'grid_size': 400,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 8000,
-          'current_risk': 0,
-          'price_precision': 0.5,
-          'price_decimals': 1,
-          'direction': 'FLAT'
+          'size_precision': 100,
+          'direction': 'FLAT',
+          'multiplier': 1,
         },
         'ETHUSD' : {
-          'sym': 'ETHUSD',
-          'grid_size': 20,                    # min is 1 Contract =~ 1.5 mXBT
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 20*20,                  # Means max 20 times the base order size
-          'current_risk': 0,
+          'order_size': 20,
+          'max_risk': 20*20,
           'price_precision': 0.05,
-          'price_decimals': 2,
-          'direction': 'FLAT'
+          'size_precision': 1,
+          'direction': 'FLAT',
+          'multiplier': 1,
         },
         'LINKUSD' : {
-          'sym': 'LINKUSD',
-          'grid_size': 200,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 4000,
-          'current_risk': 0,
+          'order_size': 200,
+          'max_risk': 200*20,
           'price_precision': 0.001,
-          'price_decimals': 3,
-          'direction': 'FLAT'
+          'size_precision': 1,
+          'direction': 'FLAT',
+          'multiplier': 1,
         },
         'XRPUSD': {
-          'sym': 'XRPUSD',
-          'grid_size': 100,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 2000,
-          'current_risk': 0,
+          'order_size': 100,
+          'max_risk': 100*20,
           'price_precision': 0.0001,
-          'price_decimals': 4,
-          'direction': 'FLAT'
+          'size_precision': 1,
+          'direction': 'FLAT',
+          'multiplier': 1,
         },
         'SOLUSDT' : {
-          'sym': 'SOLUSDT',
-          'grid_size': 500000,                    # min is 1000 == 0.1 SOL
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 500000*20,
-          'current_risk': 0,
+          'order_size': 1_000 * 500,
+          'max_risk': 1_000 * 500 * 20,
           'price_precision': 0.01,
-          'price_decimals': 2,
-          'direction': 'FLAT'
+          'size_precision': 1_000,
+          'direction': 'FLAT',
+          'multiplier': 1,
         },
         'ETHUSDT' : {
-          'sym': 'ETHUSDT',
-          'grid_size': 200000,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 2000000,
-          'current_risk': 0,
+          'order_size': 1_000 * 200,
+          'max_risk': 1_000 * 200 * 10,
           'price_precision': 0.05,
-          'price_decimals': 2,
-          'direction': 'FLAT'
+          'size_precision': 1_000,
+          'direction': 'FLAT',
+          'multiplier': 1,
         }
       },
       'account2': {
         'XBTUSD' : {
-          'sym': 'XBTUSD',
-          'grid_size': 400,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 300000,
-          'current_risk': 0,
+          'order_size': 100 * 4,
+          'max_risk': 100 * 4 * 750,
           'price_precision': 0.5,
-          'price_decimals': 1,
-          'direction': 'LONG'
+          'size_precision': 100,
+          'direction': 'LONG',
+          'multiplier': 1,
         },
-        'XBTU23' : {
-          'sym': 'XBTU23',
-          'grid_size': 400,
-          'candles': {},
-          'tob': (np.nan, np.nan),
-          'max_risk': 30000,
-          'current_risk': 0,
-          'price_precision': 0.5,
-          'price_decimals': 1,
-          'direction': 'LONG'
-        }
       }
     }
 
@@ -155,10 +110,24 @@ class Trading(Link):
     self.on_start()
 
   def on_start(self):
+    self.time_step = TIME_LOOKUP[self.LEVEL]
     for venue in self.VENUES:
       for sym in self.VENUES[venue]:
-        candles = self.fetch_candles(venue, sym, level='1m')
+        self.VENUES[venue][sym]['sym'] = sym
+        self.VENUES[venue][sym]['candles'] = {}
+        self.VENUES[venue][sym]['tob'] = (np.nan, np.nan)
+        self.VENUES[venue][sym]['mid'] = np.nan
+        self.VENUES[venue][sym]['var_t1'] = np.nan
+        self.VENUES[venue][sym]['current_risk'] = 0
+        self.VENUES[venue][sym]['orders'] = {'bid':{}, 'ask':{}}
+        self.VENUES[venue][sym]['macd'] = {'hist':np.nan, 'slope':np.nan}
+        self.VENUES[venue][sym]['price_decimals'] = str(self.VENUES[venue][sym]['price_precision'])[::-1].find('.')
+        self.VENUES[venue][sym]['size_precision'] = self.VENUES[venue][sym].get('size_precision', 1_000)
+
+        candles = self.fetch_candles(venue, sym, level=self.LEVEL)
         self.VENUES[venue][sym]['candles'] = {x['time']: x['close'] for x in candles['data']} | self.VENUES[venue][sym]['candles']
+
+    self.fetch_current_risk()
     asyncio.run(self.minutely_update())
 
   def hypo_rsi(self, closes, ret):
@@ -166,8 +135,12 @@ class Trading(Link):
 
   async def minutely_update(self):
     while True :
-      self.fetch_current_risk()
-      await self.update_limit_orders()
+      try :
+        await self.update_limit_orders()
+      except asyncio.CancelledError:
+        break
+      except Exception as e:
+        logger.error(e)
       await asyncio.sleep(self.UPDATE_SECONDS)
 
   def log_current_risk(self, venue):
@@ -182,7 +155,8 @@ class Trading(Link):
         current_risk = self.VENUES[venue][sym]['current_risk']
         current_risk_type = 'USDT'
 
-      logger.info(f'\n{venue} - {sym} current risk: {current_risk} {current_risk_type}')
+      orders = self.VENUES[venue][sym]['orders']
+      logger.info(f'{venue} - {sym} current risk: {current_risk} {current_risk_type}, orders: {orders}')
 
   def fetch_current_risk(self):
     for venue in self.VENUES:
@@ -191,7 +165,13 @@ class Trading(Link):
         for x in positions['data']:
           if x['sym'] in self.VENUES[venue]:
             self.VENUES[venue][x['sym']]['current_risk'] = x['pos_size']
-      # self.log_current_risk(venue)
+
+      orders=self.fetch_open_orders(venue)
+      if orders :
+        for x in orders['data']:
+          if x['sym'] in self.VENUES[venue]:
+            key = 'bid' if x['side'] == 'Buy' else 'ask'
+            self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
 
   def remove_duplicates(self, arr):
     unique_items = list(set(arr))
@@ -202,12 +182,14 @@ class Trading(Link):
 
   def orders_intent(self, sym):
     tob_bid, tob_ask = sym['tob']
-    times, closes = zip(*sorted(sym['candles'].items())[-100:])
+    times, closes = zip(*sorted(sym['candles'].items())[-self.LOOKBACK:])
+    if len(sym['candles']) > 10 * self.LOOKBACK :
+      sym['candles'] = dict(zip(times, closes))
     closes = list(filter(None,closes))
-    X = np.linspace(-0.2, 0.2, 100)
+    X = np.linspace(-0.2, 0.2, self.LOOKBACK)
     Y = [self.hypo_rsi(closes, x) for x in X]
     func = interp1d(Y, X, kind='cubic', fill_value='extrapolate')
-    #logger.info('\n' + json.dumps({
+    #logger.info(json.dumps({
     #	'sym': sym['sym'],
     #	'total': 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5),
     #	'close': closes[-1],
@@ -230,6 +212,7 @@ class Trading(Link):
 
   async def update_limit_orders(self):
     for venue in self.VENUES:
+      # self.log_current_risk(venue)
       for sym in self.VENUES[venue]:
         tob_bid, tob_ask =  self.VENUES[venue][sym]['tob']
         if(np.isnan(tob_bid) or np.isnan(tob_ask)):
@@ -257,14 +240,16 @@ class Trading(Link):
                 venue,
                 'order',
                 'private',
-                method='POST', params={
+                method='POST',
+                params={
                   'symbol': sym,
                   'side': 'Buy',
                   'price': bid,
                   'ordType': 'Limit',
                   'execInst': execInst,
                   'text': 'Sent from ProfitView.net'
-                })
+                }
+              )
             except Exception as e:
               logger.error(e)
           else :
@@ -286,7 +271,7 @@ class Trading(Link):
                   params = {
                     'symbol': sym,
                     'side': 'Buy',
-                    'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
+                    'orderQty': self.VENUES[venue][sym]['order_size'] * multiplier,
                     'price': bid,
                     'ordType': 'Limit',
                     'execInst': execInst,
@@ -311,14 +296,16 @@ class Trading(Link):
                 venue,
                 'order',
                 'private',
-                method='POST', params={
+                method='POST',
+                params={
                   'symbol': sym,
                   'side': 'Sell',
                   'price': bid,
                   'ordType': 'Limit',
                   'execInst': execInst,
                   'text': 'Sent from ProfitView.net'
-                })
+                }
+              )
             except Exception as e:
               logger.error(e)
           else :
@@ -336,15 +323,17 @@ class Trading(Link):
                   venue,
                   'order',
                   'private',
-                  method='POST', params={
+                  method='POST',
+                  params={
                     'symbol': sym,
                     'side': 'Sell',
-                    'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
+                    'orderQty': self.VENUES[venue][sym]['order_size'] * multiplier,
                     'price': ask,
                     'ordType': 'Limit',
                     'execInst': execInst,
                     'text': 'Sent from ProfitView.net'
-                  })
+                  }
+                )
               except Exception as e:
                 logger.error(e)
 
@@ -353,10 +342,54 @@ class Trading(Link):
   def trade_update(self, src, sym, data):
     for venue in self.VENUES:
       if sym in self.VENUES[venue]:
-        self.VENUES[venue][sym]['candles'][self.candle_bin(data['time'], '1m')] = data['price']
+        self.VENUES[venue][sym]['candles'][self.candle_bin(data['time'], self.LEVEL)] = data['price']
+        # self.update_signal()
 
   def quote_update(self, src, sym, data):
-    # logger.info('\n' + json.dumps(data))
     for venue in self.VENUES:
       if sym in self.VENUES[venue]:
         self.VENUES[venue][sym]['tob'] = (data['bid'][0], data['ask'][0])
+        if (mid := np.mean(self.VENUES[venue][sym]['tob'])) != self.VENUES[venue][sym]['mid']:
+            self.VENUES[venue][sym]['mid'] = mid
+            # self.update_limit_orders()
+
+  def order_update(self, src, sym, data):
+    venue = data['venue']
+    key = 'bid' if data['side'] == 'Buy' else 'ask'
+    if venue in self.VENUES :
+      if sym in self.VENUES[venue]:
+        # Found the order
+        if data['order_id'] in self.VENUES[venue][sym]['orders'][key] :
+          # Completed/Cancelled
+          if data.get('remain_size') == 0 :
+            self.VENUES[venue][sym]['orders'][key].pop(data['order_id'], None)
+          # Update
+          else :
+            self.VENUES[venue][sym]['orders'][key][data['order_id']].update(data)
+        # New order
+        else :
+          # Not cancelled
+          if data.get('remain_size') != 0 :
+            self.VENUES[venue][sym]['orders'][key][data['order_id']] = data
+
+  def fill_update(self, src, sym, data):
+    venue = data['venue']
+    sign = 1 if data['side'] == 'Buy' else -1
+    if venue in self.VENUES :
+      if sym in self.VENUES[venue]:
+        self.VENUES[venue][sym]['current_risk'] = round(self.VENUES[venue][sym]['current_risk'] + sign * data['fill_size'], 1)
+        # self.update_limit_orders() # update limit orders on risk change
+
+  # @http.route
+  # def get_example(self, data):
+  #     return data
+
+  # @http.route
+  # def post_example(self, data):
+  #     return data
+
+  # @http.route
+  # def get_health(self, data):
+  #     if time.time() - self.last_order_at < 180:
+  #         return time.time() - self.last_order_at
+  #     return Exception
