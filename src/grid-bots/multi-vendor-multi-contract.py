@@ -1,4 +1,4 @@
-# 2023-09-30 22:32:07
+# 2023-09-30 22:36:10
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
 
@@ -16,7 +16,6 @@ from talib import RSI, MACD
 TIME_LOOKUP = {
   '1m':  60_000,
   '5m' : 60_000 * 5,
-  '15m': 60_000 * 15,
   '1h':  60_000 * 60,
   '1d':  60_000 * 60 * 24,
 }
