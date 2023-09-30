@@ -1,16 +1,16 @@
-# 2023-09-29 16:54:26
+# 2023-09-30 18:51:02
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items
+import asyncio
+import json
+import time
 
 from profitview import Link, http, logger
 
-import json
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 from talib import RSI, MACD
-import asyncio
-import time
 
 TIME_LOOKUP = {
   '1m':  60_000,
@@ -35,10 +35,6 @@ class Trading(Link):
   LEVEL = '1m'
   SRC = 'bitmex'                         # exchange name as in the Glossary
   MAIN_VENUE='account1'
-  VENUE_IDS = {
-    'account1' : 0000000,
-    'account2' : 0000000,
-  }
   VENUES = {
       'account1': {
         'XBTUSDT' : {
@@ -145,7 +141,7 @@ class Trading(Link):
       except asyncio.CancelledError:
         break
       except Exception as e:
-        logger.error(e)
+        logger.error(f"minutely_update {e}")
       await asyncio.sleep(self.UPDATE_SECONDS)
 
   def log_current_risk(self, venue):
@@ -221,6 +217,158 @@ class Trading(Link):
         return order_id
     return None
 
+  # Place orders against a price list, minimizing API calls
+  # * If an order with same price exists, it is not updated
+  # * If there are existing orders, they get amended ( faster call )
+  # * If there are more prices than available orders, new orders get created
+  # * If there are more available orders than prices, the excess orders get deleted
+  def place_orders(self, is_bid, venue, sym, tob, prices) :
+    key = 'bid' if is_bid else 'ask'
+    sign = 1 if is_bid else -1
+    side = 'Buy' if is_bid else 'Sell'
+    opposite_direction = 'SHORT' if is_bid else 'LONG'
+
+    # Dict to hold orders to be consumed for amend, cancel or do nothing
+    orders = sym['orders'][key].copy()
+
+    # If we did not reach max_risk, or we have an open position of opposite direction of the order side
+    if (abs(sym['current_risk']) < sym['max_risk']) or ((sign * sym['current_risk']) <= 0) :
+      if self.SHUT_IT_DOWN :
+        if self.GRACEFUL_SHUTDOWN :
+          price = tob
+          execInst = 'Close,ParticipateDoNotInitiate'
+        else :
+          price = tob
+          execInst = 'Close'
+
+        try:
+          self.call_endpoint(
+            venue,
+            'order',
+            'private',
+            method = 'POST',
+            params = {
+              'symbol': sym['sym'],
+              'side': side,
+              'price': price,
+              'ordType': 'Limit',
+              'execInst': execInst,
+              'text': 'Sent from ProfitView.net'
+            }
+          )
+        except Exception as e:
+          logger.error(f"POST order {e}")
+
+      else :
+        # If there is a current open position in the opposite direction, multiply the order size
+        multiplier = 1
+        if (sign * sym['current_risk']) <= 0 :
+          multiplier = sym.get('multiplier', 1)
+
+        # If we are enforcing a trade direction, and if we are in the opposite direction order type, we have to reduce only
+        reduce_only = False
+        reduce_size = 0
+        if sym['direction'] == opposite_direction :
+          # No open position, clear prices
+          if int(sym['current_risk']) == 0 :
+            prices=[]
+          execInst = 'ParticipateDoNotInitiate,ReduceOnly'
+          reduce_only = True
+          # Total reduce_size is open position + sign * orders remain_size, need to keep track for reduce_only
+          reduce_size = sym['current_risk']
+          if orders :
+            for order_id, order in orders.items() :
+              reduce_size = round(reduce_size + sign * order['remain_size'], 1)
+        else:
+          execInst = 'ParticipateDoNotInitiate'
+
+        # First cycle, find all orders that already have the same price as prices
+        # * Use array copy to be able to remove found prices from original array
+        if prices :
+          for price in prices[:]:
+            if orders :
+              # Find if there is already an order with same price
+              order_id = self.order_exists(price, orders)
+              if order_id :
+                # The price is present, we don't need it in next cycles
+                prices.remove(price)
+                # The order has been "consumed", remove from the temporary dict
+                del orders[order_id]
+            else :
+              break
+
+        # Second cycle, amend existing orders as long as we have enough active orders
+        if prices :
+          for price in prices[:]:
+            if orders :
+              # Use an order, and remove from list of available at same time
+              order_id, _ = orders.popitem()
+              # Amend the order
+              try:
+                self.call_endpoint(
+                  venue,
+                  'order',
+                  'private',
+                  method = 'PUT',
+                  params = {
+                    'orderID': order_id,
+                    'price': price,
+                    'text': 'Sent from ProfitView.net'
+                  }
+                )
+              except Exception as e:
+                logger.error(f"PUT order {e}")
+              # Price used, we don't need it in next cycles
+              prices.remove(price)
+            else :
+              break
+
+        # There are more prices but no orders available left, create new orders
+        if prices :
+          for price in prices:
+            # In reduce only, we don't want to send an order that would put the risk in the wrong direction
+            # * They get cancelled anyway
+            if reduce_only :
+              if (sign * int(reduce_size + sign * sym['order_size'] * multiplier)) > 0 :
+                break
+            try:
+              self.call_endpoint(
+                venue,
+                'order',
+                'private',
+                method = 'POST',
+                params = {
+                  'symbol': sym['sym'],
+                  'side': side,
+                  'orderQty': sym['order_size'] * multiplier,
+                  'price': price,
+                  'ordType': 'Limit',
+                  'execInst': execInst,
+                  'text': 'Sent from ProfitView.net'
+                }
+              )
+              reduce_size = round(reduce_size + sign * sym['order_size'] * multiplier, 1)
+            except Exception as e:
+              logger.error(f"POST order {e}")
+
+        # There are more orders left but no prices, cancel the orders
+        if orders :
+          for order_id, _ in orders.items() :
+            # Cancel the order
+            try:
+              self.call_endpoint(
+                venue,
+                'order',
+                'private',
+                method='DELETE',
+                params={
+                  'orderID': order_id,
+                  'text': 'Sent from ProfitView.net'
+                }
+              )
+            except Exception as e:
+              logger.error(f"DELETE order {e}")
+
   async def update_limit_orders(self):
     for venue in self.VENUES:
       # self.log_current_risk(venue)
@@ -230,274 +378,11 @@ class Trading(Link):
           continue
 
         intent = self.orders_intent(self.VENUES[venue][sym])
-        bids = intent['bids']
-        asks = intent['asks']
-
-        # Dicts to hold orders to be consumed for amend, cancel or do nothing
-        orders_bid = self.VENUES[venue][sym]['orders']['bid'].copy()
-        orders_ask = self.VENUES[venue][sym]['orders']['ask'].copy()
-
-        # Copy current_risk to keep track for ReduceOnly orders
-        current_risk = self.VENUES[venue][sym]['current_risk']
 
         # Buy orders
-        if (abs(current_risk) <  self.VENUES[venue][sym]['max_risk']) or (current_risk <= 0):
-          if self.SHUT_IT_DOWN :
-            if self.GRACEFUL_SHUTDOWN :
-              bid = tob_bid
-              execInst = 'Close,ParticipateDoNotInitiate'
-            else :
-              bid = tob_bid
-              execInst = 'Close'
-
-            try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method='POST',
-                params={
-                  'symbol': sym,
-                  'side': 'Buy',
-                  'price': bid,
-                  'ordType': 'Limit',
-                  'execInst': execInst,
-                  'targetAccountId' : self.VENUE_IDS[venue],
-                  'text': 'Sent from ProfitView.net'
-                }
-              )
-            except Exception as e:
-              logger.error(e)
-          else :
-            # If I have a current open position in the opposite direction, double the order size
-            multiplier = 1
-            reduce_only = False
-            if current_risk <= 0 :
-              multiplier = self.VENUES[venue][sym].get('multiplier', 1)
-            if self.VENUES[venue][sym]['direction'] == 'SHORT' :
-              if int(current_risk) == 0 :
-                bids=[]
-              execInst = 'ParticipateDoNotInitiate,ReduceOnly'
-              reduce_only = True
-            else:
-              execInst = 'ParticipateDoNotInitiate'
-
-            # First cycle, find all orders that already have the same price as bids
-            # * Use array copy to be able to remove found bids from original array
-            if bids :
-              for bid in bids[:]:
-                # We need available have orders
-                if orders_bid :
-                  # Find if there is already an order with same price
-                  order_id = self.order_exists(bid, orders_bid)
-                  if order_id :
-                    # The bid is present, we don't need in next cycles
-                    bids.remove(bid)
-                    # The order has been "consumed", remove from the temporary dict
-                    del orders_bid[order_id]
-                else :
-                  break
-
-            # Second cycle, amend existing orders as long as we have enough active orders
-            if bids :
-              for bid in bids[:]:
-                if orders_bid :
-                  # Use an order, and remove from list of available at same time
-                  order_id, _ = orders_bid.popitem()
-                  # Amend the order
-                  # self.amend_order(venue, order_id=order_id, price=bid)
-                  try:
-                    self.call_endpoint(
-                      venue,
-                      'order',
-                      'private',
-                      method='PUT',
-                      params={
-                        'orderID': order_id,
-                        'price': bid,
-                        'targetAccountId' : self.VENUE_IDS[venue],
-                        'text': 'Sent from ProfitView.net'
-                      }
-                    )
-                  except Exception as e:
-                    logger.error(e)
-                  # Bid used, we don't need in next cycles
-                  bids.remove(bid)
-                else :
-                  break
-
-            # There are more bid orders but no orders available left, create a new one
-            if bids :
-              for bid in bids:
-                # In reduce only, we don't want to send an order that would put the risk in the wrong direction
-                # * They get cancelled anyway
-                if reduce_only :
-                  current_risk += self.VENUES[venue][sym]['order_size'] * multiplier
-                  if int(current_risk) > 0 :
-                    break
-                try:
-                  self.call_endpoint(
-                    venue,
-                    'order',
-                    'private',
-                    method = 'POST',
-                    params = {
-                      'symbol': sym,
-                      'side': 'Buy',
-                      'orderQty': self.VENUES[venue][sym]['order_size'] * multiplier,
-                      'price': bid,
-                      'ordType': 'Limit',
-                      'execInst': execInst,
-                      'targetAccountId' : self.VENUE_IDS[venue],
-                      'text': 'Sent from ProfitView.net'
-                    }
-                  )
-                except Exception as e:
-                  logger.error(e)
-
-            # There are more orders left but no bids, cancel the orders
-            if orders_bid :
-              for order_id, _ in orders_bid.items() :
-                # Cancel the order
-                # self.cancel_order(venue, order_id=order_id)
-                try:
-                  self.call_endpoint(
-                    venue,
-                    'order',
-                    'private',
-                    method='DELETE',
-                    params={
-                      'orderID': order_id,
-                      'targetAccountId' : self.VENUE_IDS[venue],
-                      'text': 'Sent from ProfitView.net'
-                    }
-                  )
-                except Exception as e:
-                  logger.error(e)
-
+        self.place_orders(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], tob=tob_bid, prices=intent['bids'] )
         # Sell orders
-        if (abs(current_risk) <  self.VENUES[venue][sym]['max_risk']) or (current_risk >= 0):
-          if self.SHUT_IT_DOWN :
-            if self.GRACEFUL_SHUTDOWN :
-              bid = tob_ask
-              execInst = 'Close,ParticipateDoNotInitiate'
-            else :
-              bid = tob_ask
-              execInst = 'Close'
-
-            try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method='POST',
-                params={
-                  'symbol': sym,
-                  'side': 'Sell',
-                  'price': bid,
-                  'ordType': 'Limit',
-                  'execInst': execInst,
-                  'targetAccountId' : self.VENUE_IDS[venue],
-                  'text': 'Sent from ProfitView.net'
-                }
-              )
-            except Exception as e:
-              logger.error(e)
-          else :
-            # If I have a current open position in the opposite direction, double the order size
-            multiplier = 1
-            reduce_only = False
-            if current_risk >= 0 :
-              multiplier = self.VENUES[venue][sym].get('multiplier', 1)
-            if self.VENUES[venue][sym]['direction'] == 'LONG' :
-              if int(current_risk) == 0 :
-                asks=[]
-              execInst = 'ParticipateDoNotInitiate,ReduceOnly'
-              reduce_only = True
-            else:
-              execInst = 'ParticipateDoNotInitiate'
-
-            if asks :
-              for ask in asks[:]:
-                if orders_ask :
-                  order_id = self.order_exists(ask, orders_ask)
-                  if order_id :
-                    asks.remove(ask)
-                    del orders_ask[order_id]
-                else :
-                  break
-
-            if asks :
-              for ask in asks[:]:
-                if orders_ask :
-                  order_id, _ = orders_ask.popitem()
-                  # self.amend_order(venue, order_id=order_id, price=ask)
-                  try:
-                    self.call_endpoint(
-                      venue,
-                      'order',
-                      'private',
-                      method='PUT',
-                      params={
-                        'orderID': order_id,
-                        'price': ask,
-                        'targetAccountId' : self.VENUE_IDS[venue],
-                        'text': 'Sent from ProfitView.net'
-                      }
-                    )
-                  except Exception as e:
-                    logger.error(e)
-                  asks.remove(ask)
-                else :
-                  break
-
-            if asks :
-              for ask in asks:
-                # In reduce only, we don't want to send an order that would put the risk in the wrong direction
-                # * They get cancelled anyway
-                if reduce_only :
-                  current_risk -= self.VENUES[venue][sym]['order_size'] * multiplier
-                  if int(current_risk) < 0 :
-                    break
-                try:
-                  self.call_endpoint(
-                    venue,
-                    'order',
-                    'private',
-                    method='POST',
-                    params={
-                      'symbol': sym,
-                      'side': 'Sell',
-                      'orderQty': self.VENUES[venue][sym]['order_size'] * multiplier,
-                      'price': ask,
-                      'ordType': 'Limit',
-                      'execInst': execInst,
-                      'targetAccountId' : self.VENUE_IDS[venue],
-                      'text': 'Sent from ProfitView.net'
-                    }
-                  )
-                except Exception as e:
-                  logger.error(e)
-
-            # There are more orders left but no bids, cancel the orders
-            if orders_ask :
-              for order_id, _ in orders_ask.items() :
-                # Cancel the order
-                # self.cancel_order(venue, order_id=order_id)
-                try:
-                  self.call_endpoint(
-                    venue,
-                    'order',
-                    'private',
-                    method='DELETE',
-                    params={
-                      'orderID': order_id,
-                      'targetAccountId' : self.VENUE_IDS[venue],
-                      'text': 'Sent from ProfitView.net'
-                    }
-                  )
-                except Exception as e:
-                  logger.error(e)
+        self.place_orders(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], tob=tob_ask, prices=intent['asks'] )
 
         await asyncio.sleep(1)
 
