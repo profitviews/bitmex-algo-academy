@@ -1,6 +1,7 @@
-# 2023-09-30 18:51:02
+# 2023-09-30 22:32:07
 # Note: this file is to be used within profitview.net/trading/bots
-# pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items
+# pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
+
 import asyncio
 import json
 import time
@@ -26,6 +27,7 @@ ALPHA = 0.193613
 BETA = 0.786155
 
 class Trading(Link):
+  ACTIVE = True
   UPDATE_SECONDS = 60
   SHUT_IT_DOWN = False
   GRACEFUL_SHUTDOWN = True
@@ -191,14 +193,14 @@ class Trading(Link):
     Y = [self.hypo_rsi(closes, x) for x in X]
     func = interp1d(Y, X, kind='cubic', fill_value='extrapolate')
     #logger.info(json.dumps({
-    #	'sym': sym['sym'],
-    #	'total': 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5),
-    #	'close': closes[-1],
-    #	'closeLength': len(closes),
-    #	'func': (1 + float(func(60))),
-    #	'tob': tob_ask,
-    #	'final_closest_bid': np.max([tob_ask, 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5)]),
-    #	'current_risk': sym['current_risk']
+    #  'sym': sym['sym'],
+    #  'total': 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5),
+    #  'close': closes[-1],
+    #  'closeLength': len(closes),
+    #  'func': (1 + float(func(60))),
+    #  'tob': tob_ask,
+    #  'final_closest_bid': np.max([tob_ask, 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5)]),
+    #  'current_risk': sym['current_risk']
     #}))
 
     orders = {
@@ -242,20 +244,21 @@ class Trading(Link):
           execInst = 'Close'
 
         try:
-          self.call_endpoint(
-            venue,
-            'order',
-            'private',
-            method = 'POST',
-            params = {
-              'symbol': sym['sym'],
-              'side': side,
-              'price': price,
-              'ordType': 'Limit',
-              'execInst': execInst,
-              'text': 'Sent from ProfitView.net'
-            }
-          )
+          if self.ACTIVE:
+            self.call_endpoint(
+              venue,
+              'order',
+              'private',
+              method = 'POST',
+              params = {
+                'symbol': sym['sym'],
+                'side': side,
+                'price': price,
+                'ordType': 'Limit',
+                'execInst': execInst,
+                'text': 'Sent from ProfitView.net'
+              }
+            )
         except Exception as e:
           logger.error(f"POST order {e}")
 
@@ -305,17 +308,18 @@ class Trading(Link):
               order_id, _ = orders.popitem()
               # Amend the order
               try:
-                self.call_endpoint(
-                  venue,
-                  'order',
-                  'private',
-                  method = 'PUT',
-                  params = {
-                    'orderID': order_id,
-                    'price': price,
-                    'text': 'Sent from ProfitView.net'
-                  }
-                )
+                if self.ACTIVE:
+                  self.call_endpoint(
+                    venue,
+                    'order',
+                    'private',
+                    method = 'PUT',
+                    params = {
+                      'orderID': order_id,
+                      'price': price,
+                      'text': 'Sent from ProfitView.net'
+                    }
+                  )
               except Exception as e:
                 logger.error(f"PUT order {e}")
               # Price used, we don't need it in next cycles
@@ -332,21 +336,22 @@ class Trading(Link):
               if (sign * int(reduce_size + sign * sym['order_size'] * multiplier)) > 0 :
                 break
             try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method = 'POST',
-                params = {
-                  'symbol': sym['sym'],
-                  'side': side,
-                  'orderQty': sym['order_size'] * multiplier,
-                  'price': price,
-                  'ordType': 'Limit',
-                  'execInst': execInst,
-                  'text': 'Sent from ProfitView.net'
-                }
-              )
+              if self.ACTIVE:
+                self.call_endpoint(
+                  venue,
+                  'order',
+                  'private',
+                  method = 'POST',
+                  params = {
+                    'symbol': sym['sym'],
+                    'side': side,
+                    'orderQty': sym['order_size'] * multiplier,
+                    'price': price,
+                    'ordType': 'Limit',
+                    'execInst': execInst,
+                    'text': 'Sent from ProfitView.net'
+                  }
+                )
               reduce_size = round(reduce_size + sign * sym['order_size'] * multiplier, 1)
             except Exception as e:
               logger.error(f"POST order {e}")
@@ -356,16 +361,17 @@ class Trading(Link):
           for order_id, _ in orders.items() :
             # Cancel the order
             try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method='DELETE',
-                params={
-                  'orderID': order_id,
-                  'text': 'Sent from ProfitView.net'
-                }
-              )
+              if self.ACTIVE:
+                self.call_endpoint(
+                  venue,
+                  'order',
+                  'private',
+                  method='DELETE',
+                  params={
+                    'orderID': order_id,
+                    'text': 'Sent from ProfitView.net'
+                  }
+                )
             except Exception as e:
               logger.error(f"DELETE order {e}")
 
@@ -427,13 +433,38 @@ class Trading(Link):
         self.VENUES[venue][sym]['current_risk'] = round(self.VENUES[venue][sym]['current_risk'] + sign * data['fill_size'], 1)
         # self.update_limit_orders() # update limit orders on risk change
 
-  # @http.route
-  # def get_example(self, data):
-  #     return data
+  @http.route
+  def get_button(self, data):
+    logger.info(("get_button", data))
+    return "get_button"
 
-  # @http.route
-  # def post_example(self, data):
-  #     return data
+  @http.route
+  def post_button(self, data):
+    logger.info("post_button")
+    logger.info(f"UPDATE_SECONDS - before: {self.UPDATE_SECONDS}")
+    logger.info(f"GRID_BIDS - before: {self.GRID_BIDS}")
+    logger.info(f"GRID_ASKS - before: {self.GRID_ASKS}")
+    logger.info(f"LOOKBACK - before: {self.LOOKBACK}")
+    logger.info(f"LEVEL - before: {self.LEVEL}")
+    output = []
+    for (p, v) in data.items():
+      v = v.strip()
+      if v[0]+v[-1] == '()':  # eg GRID_BIDS int tuple as string
+        v = tuple(int(c.strip()) for c in v[1:-1].split(','))
+      setattr(self, p, v)  # No validation!
+      output.append([p, v])
+    logger.info(f"UPDATE_SECONDS - after: {self.UPDATE_SECONDS}")
+    logger.info(f"GRID_BIDS - after: {self.GRID_BIDS}")
+    logger.info(f"GRID_ASKS - after: {self.GRID_ASKS}")
+    logger.info(f"LOOKBACK - after: {self.LOOKBACK}")
+    logger.info(f"LEVEL - after: {self.LEVEL}")
+    return output  # Just returning what's passed as an example
+
+  @http.route
+  def get_toggle_bot(self, data):  # Possibly toggle order entry
+    self.ACTIVE = not self.ACTIVE
+    logger.info("Active" if self.ACTIVE else "Inactive")
+    return "get_toggle_bot"
 
   # @http.route
   # def get_health(self, data):
