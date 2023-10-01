@@ -37,7 +37,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'XBTUSD' : {
@@ -50,7 +50,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'XBTZ23' : {
@@ -63,7 +63,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'ETHUSD' : {
@@ -76,7 +76,7 @@ class Trading(Link):
         'price_precision': 0.05,
         'price_decimals': 2,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'LINKUSD' : {
@@ -89,7 +89,7 @@ class Trading(Link):
         'price_precision': 0.001,
         'price_decimals': 3,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'XRPUSD': {
@@ -102,7 +102,7 @@ class Trading(Link):
         'price_precision': 0.0001,
         'price_decimals': 4,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'SOLUSDT' : {
@@ -117,7 +117,7 @@ class Trading(Link):
         'price_precision': 0.05,
         'price_decimals': 2,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'ETHUSDT' : {
@@ -130,7 +130,7 @@ class Trading(Link):
         'price_precision': 0.05,
         'price_decimals': 2,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       }
   	},
@@ -145,7 +145,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'LONG',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'XBTZ23' : {
@@ -158,7 +158,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'LONG',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'ETHUSD' : {
@@ -171,7 +171,7 @@ class Trading(Link):
         'price_precision': 0.05,
         'price_decimals': 2,
         'direction': 'LONG',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'LINKUSD' : {
@@ -184,7 +184,7 @@ class Trading(Link):
         'price_precision': 0.001,
         'price_decimals': 3,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       },
       'XRPUSD': {
@@ -197,7 +197,7 @@ class Trading(Link):
         'price_precision': 0.0001,
         'price_decimals': 4,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       }
     },
@@ -212,7 +212,7 @@ class Trading(Link):
         'price_precision': 0.5,
         'price_decimals': 1,
         'direction': 'FLAT',
-		'macd': { 'hist': np.nan, 'slope': np.nan },
+		'macd': np.nan,
 		'mode': 'GRID'
       }
     }
@@ -285,7 +285,6 @@ class Trading(Link):
     X = np.linspace(-0.2, 0.2, 100)
     Y = [self.hypo_rsi(closes, x) for x in X]
     func = interp1d(Y, X, kind='cubic', fill_value='extrapolate')
-	logger.info(json.dumps(sym['macd']))
 
     orders = {
       'bids': [np.min([tob_bid, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in self.GRID_BIDS],
@@ -299,27 +298,31 @@ class Trading(Link):
 
   def update_signal(self, sym):
       macd, signal, hist = talib.MACD(self.last_closes(sym))
-      N = 10 # less points required to interpolate accurately
-      try:
-          cubic = scipy.interpolate.CubicSpline(range(N), hist[-N:])
-          sym['macd']['hist'] = hist[-1]
-		  sym['macd']['slope'] = float(cubic(N-1, 1))
-      except Exception as e:
-          logger.error(f'unable to update signal - {e}', exc_info=True)
+      sym['macd'] = hist[-1]
 
   def compute_mode(self, sym):
-	previous_macd = sym['macd']['hist']
+	previous_macd = sym['macd']
 	self.update_signal(sym)
-	if(sym['macd']['hist'] > 15 and sym['macd']['hist'] > previous_macd):
+	logger.info('prev: ' + str(previous_macd) + ' curr: ' + str(sym['macd']))
+
+	if(np.isnan(previous_macd)):
+	  return
+
+	if(np.greater(sym['macd'], 15) and np.greater(sym['macd'], previous_macd)):
 	  sym['mode'] = 'TAKER_LONG'
-    elif(sym['macd']['hist'] < -15 and sym['macd']['hist'] < previous_macd):
+	  logger.info('TAKER_LONG')
+    elif(np.greater(-15, sym['macd']) and sym['macd'] < previous_macd):
 	  sym['mode'] = 'TAKER_SHORT'
-	elif(sym['mode'] == 'TAKER_LONG' and sym['macd']['hist'] < previous_macd):
+	  logger.info('TAKER_SHORT')
+	elif(sym['mode'] == 'TAKER_LONG' and sym['macd'] < previous_macd):
 	  sym['mode'] = 'REDUCE'
-	elif(sym['mode'] == 'TAKER_SHORT' and sym['macd']['hist'] > previous_macd):
+	  logger.info('REDUCE')
+	elif(sym['mode'] == 'TAKER_SHORT' and sym['macd'] > previous_macd):
 	  sym['mode'] = 'REDUCE'
-	elif(sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd']['hist'] > -15 and sym['macd']['hist'] < 15))):
+	  logger.info('REDUCE')
+	elif(sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -15 and sym['macd'] < 15))):
 	  sym['mode'] = 'GRID'
+	  logger.info('grid')
 
 
   async def trade(self):
@@ -349,6 +352,7 @@ class Trading(Link):
         method='POST', params={
           'symbol': sym,
           'side': 'Buy',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'],
           'ordType': 'Market',
           'text': 'Sent from ProfitView.net'
         }
@@ -363,6 +367,7 @@ class Trading(Link):
           'side': 'Buy',
           'price': tob_bid,
           'ordType': 'Limit',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'],
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
@@ -383,6 +388,7 @@ class Trading(Link):
           'symbol': sym,
           'side': 'Sell',
           'ordType': 'Market',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'],
           'text': 'Sent from ProfitView.net'
         }
 	  )
@@ -396,6 +402,7 @@ class Trading(Link):
           'side': 'Sell',
           'price': tob_ask,
           'ordType': 'Limit',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'],
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
