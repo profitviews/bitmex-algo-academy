@@ -1,4 +1,4 @@
-# 2023-10-01 18:23:09
+# 2023-10-02 12:48:12
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
 
@@ -56,6 +56,7 @@ class Trading(Link):
   GRID_BIDS = (40, 30, 20) # (40, 30, 20, 10)
   GRID_ASKS = (60, 70, 80) # (60, 70, 80, 90)
   LOOKBACK = 150
+  MACD_RANGE = 15
   LEVEL = '1m'
   SRC = 'bitmex'                         # exchange name as in the Glossary
   MAIN_VENUE='account1'
@@ -133,7 +134,7 @@ class Trading(Link):
           'direction': 'LONG',
           'multiplier': 1,
         },
-      }
+      },
     }
   INIT_COMPLETE = False
 
@@ -152,7 +153,7 @@ class Trading(Link):
         self.VENUES[venue][sym]['var_t1'] = np.nan
         self.VENUES[venue][sym]['current_risk'] = 0
         self.VENUES[venue][sym]['orders'] = {'bid':{}, 'ask':{}}
-        self.VENUES[venue][sym]['macd'] = {'hist':np.nan, 'slope':np.nan}
+        self.VENUES[venue][sym]['macd'] = np.nan
         self.VENUES[venue][sym]['price_decimals'] = str(self.VENUES[venue][sym]['price_precision'])[::-1].find('.')
         self.VENUES[venue][sym]['size_precision'] = self.VENUES[venue][sym].get('size_precision', 1_000)
         self.VENUES[venue][sym]['price_spread'] = self.VENUES[venue][sym].get('price_spread', 0.5)
@@ -172,7 +173,7 @@ class Trading(Link):
   async def minutely_update(self):
     while True :
       try :
-        await self.update_limit_orders()
+        await self.trade()
       except asyncio.CancelledError:
         break
       except Exception as e:
@@ -209,6 +210,8 @@ class Trading(Link):
             key = 'bid' if x['side'] == 'Buy' else 'ask'
             self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
 
+      # self.log_current_risk(venue)
+
   def remove_duplicates(self, arr):
     unique_items = list(set(arr))
     return unique_items
@@ -227,16 +230,6 @@ class Trading(Link):
       X = np.linspace(-0.2, 0.2, self.LOOKBACK)
       Y = [self.hypo_rsi(closes, x) for x in X]
       func = interp1d(Y, X, kind='cubic', fill_value='extrapolate')
-      #logger.info(json.dumps({
-      #  'sym': sym['sym'],
-      #  'total': 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5),
-      #  'close': closes[-1],
-      #  'closeLength': len(closes),
-      #  'func': (1 + float(func(60))),
-      #  'tob': tob_ask,
-      #  'final_closest_bid': np.max([tob_ask, 0.5 * round(closes[-1] * (1 + float(func(60))) / 0.5)]),
-      #  'current_risk': sym['current_risk']
-      #}))
 
       orders = {
         'bids': [np.min([tob_bid, self.round_value(0.5 * round(closes[-1] * (1 + float(func(x))) / 0.5,4),sym['price_precision'], sym['price_decimals'])]) for x in self.GRID_BIDS],
@@ -259,7 +252,7 @@ class Trading(Link):
   # * If there are existing orders, they get amended ( faster call )
   # * If there are more prices than available orders, new orders get created
   # * If there are more available orders than prices, the excess orders get deleted
-  def place_orders(self, is_bid, venue, sym, tob, prices) :
+  def limit_orders(self, is_bid, venue, sym, tob, prices) :
     key = 'bid' if is_bid else 'ask'
     sign = 1 if is_bid else -1
     side = 'Buy' if is_bid else 'Sell'
@@ -267,6 +260,7 @@ class Trading(Link):
 
     # Dict to hold orders to be consumed for amend, cancel or do nothing
     orders = sym['orders'][key].copy()
+    # logger.info(f'limit_orders start, {orders=}')
 
     # If we did not reach max_risk, or we have an open position of opposite direction of the order side
     if (abs(sym['current_risk']) < sym['max_risk']) or ((sign * sym['current_risk']) <= 0) :
@@ -297,13 +291,13 @@ class Trading(Link):
               )
               if response["error"] is not None :
                 logger.error(f"POST order {response['error']}")
-                time.sleep(0.1)
+                time.sleep(0.5)
                 continue
               if attempt > 0 :
                 logger.info(f"POST order success after {attempt=}")
           except Exception as e:
             logger.error(f"POST order {e}")
-            time.sleep(0.1)
+            time.sleep(0.5)
           else:
             break
 
@@ -349,8 +343,8 @@ class Trading(Link):
         if prices :
           for price in prices[:]:
             if orders :
-              # Use an order, and remove from list of available at same time
-              order_id, _ = orders.popitem()
+              # Get first order_id available
+              order_id = next(iter(orders))
               # Amend the order
               for attempt in range(10):
                 try:
@@ -367,17 +361,22 @@ class Trading(Link):
                       }
                     )
                     if response["error"] is not None :
+                      if ('Filled' in response['error']) or ('Canceled' in response['error']):
+                        del orders[order_id]
+                        break
                       logger.error(f"PUT order {response['error']}")
-                      time.sleep(0.1)
+                      time.sleep(0.5)
                       continue
                     if attempt > 0 :
                       logger.info(f"PUT order success after {attempt=}")
                   prices.remove(price)
+                  del orders[order_id]
                 except Exception as e:
-                  if 'Filled' in str(e):
+                  if ('Filled' in str(e)) or ('Canceled' in str(e)):
+                    del orders[order_id]
                     break
                   logger.error(f"PUT order {e}")
-                  time.sleep(0.1)
+                  time.sleep(0.5)
                 else:
                   break
             else :
@@ -411,14 +410,14 @@ class Trading(Link):
                   )
                   if response["error"] is not None :
                     logger.error(f"POST order {response['error']}")
-                    time.sleep(0.1)
+                    time.sleep(0.5)
                     continue
                   if attempt > 0 :
                     logger.info(f"POST order success after {attempt=}")
                 reduce_size = round(reduce_size + sign * sym['order_size'] * multiplier, 1)
               except Exception as e:
                 logger.error(f"POST order {e}")
-                time.sleep(0.1)
+                time.sleep(0.5)
               else:
                 break
 
@@ -443,39 +442,83 @@ class Trading(Link):
                   )
                   if response["error"] is not None :
                     logger.error(f"DELETE order {response['error']}")
-                    time.sleep(0.1)
+                    time.sleep(0.5)
                     continue
                   if attempt > 0 :
                     logger.info(f"DELETE order success after {attempt=}")
               except Exception as e:
                 logger.error(f"DELETE order {e}")
-                time.sleep(0.1)
+                time.sleep(0.5)
               else:
                 break
 
-  async def update_limit_orders(self):
+  def taker_order(self, is_bid, venue, sym, price) :
+    sign = 1 if is_bid else -1
+    side = 'Buy' if is_bid else 'Sell'
+
+    if (abs(sym['current_risk']) < sym['max_risk']) or ((sign * sym['current_risk']) <= 0) :
+      for attempt in range(10):
+        try:
+          if self.ACTIVE:
+            response = self.call_endpoint(
+              venue,
+              'order',
+              'private',
+              method = 'POST',
+              params = {
+                'symbol': sym['sym'],
+                'side': side,
+                'orderQty': sym['order_size'],
+                'ordType': 'Market',
+                'text': 'Sent from ProfitView.net'
+              }
+            )
+            if response["error"] is not None :
+              logger.error(f"POST order {response['error']}")
+              time.sleep(0.5)
+              continue
+            if attempt > 0 :
+              logger.info(f"POST order success after {attempt=}")
+        except Exception as e:
+          logger.error(f"POST order {e}")
+          time.sleep(0.5)
+        else:
+          break
+
+      self.limit_orders( is_bid=is_bid, venue=venue, sym=sym, tob=price, prices=[price])
+
+  async def trade(self):
     for venue in self.VENUES:
-      # self.log_current_risk(venue)
       for sym in self.VENUES[venue]:
+        self.compute_mode(self.VENUES[venue][sym])
+        logger.info(f'sym: {self.VENUES[venue][sym]["sym"]} {self.VENUES[venue][sym]["mode"]}')
         tob_bid, tob_ask =  self.VENUES[venue][sym]['tob']
-        if(np.isnan(tob_bid) or np.isnan(tob_ask)):
-          continue
 
-        wait = True
         if self.VENUES[venue][sym]['mode'] == 'GRID' :
-          intent = self.orders_intent(self.VENUES[venue][sym])
-
-          # Buy orders
-          self.place_orders(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], tob=tob_bid, prices=intent['bids'] )
-          # Sell orders
-          self.place_orders(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], tob=tob_ask, prices=intent['asks'] )
-        else :
-          wait = False
-
-        if wait :
+          await self.update_limit_orders(venue, self.VENUES[venue][sym])
           await asyncio.sleep(1)
+        elif (self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] < 0) :
+          if np.isnan(tob_bid) :
+            continue
+          self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid )
+        elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] > 0)):
+          if np.isnan(tob_ask) :
+            continue
+          self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask )
 
-  @debounce(1)
+  async def update_limit_orders(self, venue, sym):
+    tob_bid, tob_ask =  sym['tob']
+    if(np.isnan(tob_bid) or np.isnan(tob_ask)):
+      return
+
+    intent = self.orders_intent(sym)
+
+    # Buy orders
+    self.limit_orders( is_bid=True, venue=venue, sym=sym, tob=tob_bid, prices=intent['bids'] )
+    # Sell orders
+    self.limit_orders( is_bid=False, venue=venue, sym=sym, tob=tob_ask, prices=intent['asks'] )
+
+  @debounce(5)
   def update_tob_order(self, venue, sym) :
     tob_bid, tob_ask = sym['tob']
 
@@ -488,22 +531,91 @@ class Trading(Link):
     logger.info(f'sym: {sym["sym"]} Update tob, {tob=} is_bid={sym["tob_is_bid"]}')
 
     # Create or update the order with the right side and tob value
-    self.place_orders(is_bid=sym['tob_is_bid'], venue=venue, sym=sym, tob=tob, prices=[tob] )
+    self.limit_orders( is_bid=sym['tob_is_bid'], venue=venue, sym=sym, tob=tob, prices=[tob] )
+    # Delete other side orders
+    self.limit_orders( is_bid=not sym['tob_is_bid'], venue=venue, sym=sym, tob=tob, prices=[] )
 
-  def reverse_tob_order(self, venue, sym) :
-    tob_bid, tob_ask = sym['tob']
+  def reverse_tob_order(self, venue, sym, previous_order_id) :
 
-    sym['tob_is_bid'] = not sym['tob_is_bid']
+    is_filled = False
+    for attempt in range(10):
+      try:
+        response = self.call_endpoint(
+          venue,
+          'order',
+          'private',
+          method = 'GET',
+          params = {
+            'filter' : json.dumps({
+              'orderID': previous_order_id,
+            }),
+            'count': 1,
+            'text': 'Sent from ProfitView.net'
+          }
+        )
+        if response["error"] is not None :
+          if 'Filled' in response['error'] :
+            is_filled = True
+            break
+          logger.error(f"GET order {response['error']}")
+          time.sleep(0.5)
+          continue
+        if attempt > 0 :
+          logger.info(f"GET order success after {attempt=}")
+        if response["data"] :
+          order = response["data"][0]
+          if order["ordStatus"] == "Filled" :
+            is_filled = True
+      except Exception as e:
+        if 'Filled' in str(e) :
+          is_filled = True
+          break
+        logger.error(f"GET order {e}")
+        time.sleep(0.5)
+      else:
+        break
 
-    if sym['tob_is_bid'] :
-      tob = tob_bid - ( sym['price_precision'] * 10 )
-    else :
-      tob = tob_ask + ( sym['price_precision'] * 10 )
+    if is_filled :
+      sym['tob_is_bid'] = not sym['tob_is_bid']
 
-    logger.info(f'sym: {sym["sym"]} Reverse tob, {tob=} is_bid={sym["tob_is_bid"]}')
+      self.update_tob_order(venue=venue, sym=sym)
 
-    # Create or update the order with the right side and tob value
-    self.place_orders(is_bid=sym['tob_is_bid'], venue=venue, sym=sym, tob=tob, prices=[tob] )
+    logger.info(f'sym: {sym["sym"]} Reverse tob, {is_filled=} is_bid={sym["tob_is_bid"]}')
+
+  @property
+  def time_bin_now(self):
+    return self.candle_bin(self.epoch_now, self.LEVEL)
+
+  def last_closes(self, sym):
+    start_time = self.time_bin_now - self.LOOKBACK * 60_000
+    times = [start_time + (i + 1) * 60_000 for i in range(self.LOOKBACK)]
+    closes = [sym['candles'].get(x, np.nan) for x in times]
+    return np.array(pd.Series(closes).ffill())
+
+  def update_signal(self, sym):
+    last_closes = self.last_closes(sym)
+    macd, signal, hist = MACD(last_closes)
+    sym['macd'] = (hist[-1]/np.mean(last_closes)) * 100
+
+  def compute_mode(self, sym):
+    if sym['mode'] == 'TOB' :
+      return
+    previous_macd = sym['macd']
+    self.update_signal(sym)
+    logger.info(sym['sym'] + ' prev: ' + str(previous_macd) + ' curr: ' + str(sym['macd']))
+    if np.isnan(previous_macd) :
+      return
+
+    if np.greater(sym['macd'], self.MACD_RANGE) and np.greater(sym['macd'], previous_macd) :
+      sym['mode'] = 'TAKER_LONG'
+    elif np.greater(-self.MACD_RANGE, sym['macd']) and (sym['macd'] < previous_macd) :
+      sym['mode'] = 'TAKER_SHORT'
+    elif sym['mode'] == 'TAKER_LONG' and (sym['macd'] < previous_macd) :
+      sym['mode'] = 'REDUCE'
+    elif sym['mode'] == 'TAKER_SHORT' and (sym['macd'] > previous_macd) :
+      sym['mode'] = 'REDUCE'
+    elif sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['order_size'] or (sym['macd'] > -self.MACD_RANGE and sym['macd'] < self.MACD_RANGE)) :
+      sym['mode'] = 'GRID'
 
   def trade_update(self, src, sym, data):
     if not self.INIT_COMPLETE :
@@ -511,7 +623,6 @@ class Trading(Link):
     for venue in self.VENUES:
       if sym in self.VENUES[venue]:
         self.VENUES[venue][sym]['candles'][self.candle_bin(data['time'], self.LEVEL)] = data['price']
-        # self.update_signal()
 
   def quote_update(self, src, sym, data):
     if not self.INIT_COMPLETE :
@@ -522,7 +633,6 @@ class Trading(Link):
         self.VENUES[venue][sym]['tob'] = (data['bid'][0], data['ask'][0])
         if (mid := np.mean(self.VENUES[venue][sym]['tob'])) != self.VENUES[venue][sym]['mid']:
           self.VENUES[venue][sym]['mid'] = mid
-          # self.update_limit_orders()
         if self.VENUES[venue][sym]['mode'] == 'TOB' :
           if (tob_bid != data['bid'][0]) or (tob_ask != data['ask'][0]) :
             self.update_tob_order(venue=venue, sym=self.VENUES[venue][sym])
@@ -542,7 +652,7 @@ class Trading(Link):
             # Handle tob mode
             if self.VENUES[venue][sym]['mode'] == 'TOB' :
               # Handle inversion: place bid if order was Sell, place ask if order was Buy
-              self.reverse_tob_order(venue=venue, sym=self.VENUES[venue][sym])
+              self.reverse_tob_order(venue=venue, sym=self.VENUES[venue][sym], previous_order_id=data['order_id'])
           # Update
           else :
             self.VENUES[venue][sym]['orders'][key][data['order_id']].update(data)
@@ -560,7 +670,6 @@ class Trading(Link):
     if venue in self.VENUES :
       if sym in self.VENUES[venue]:
         self.VENUES[venue][sym]['current_risk'] = round(self.VENUES[venue][sym]['current_risk'] + sign * data['fill_size'], 1)
-        # self.update_limit_orders() # update limit orders on risk change
 
   @http.route
   def get_button(self, data):
