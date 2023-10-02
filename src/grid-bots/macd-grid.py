@@ -68,10 +68,10 @@ class Trading(Link):
       },
       'ETHUSD' : {
         'sym': 'ETHUSD',
-        'grid_size': 10,
+        'grid_size': 5,
         'candles': {},
         'tob': (np.nan, np.nan),
-        'max_risk': 10*100,
+        'max_risk': 5*100,
         'current_risk': 0,
         'price_precision': 0.05,
         'price_decimals': 2,
@@ -137,10 +137,10 @@ class Trading(Link):
     'RunningDoge': {
       'XBTUSD' : {
         'sym': 'XBTUSD',
-        'grid_size': 400,
+        'grid_size': 2000,
         'candles': {},
         'tob': (np.nan, np.nan),
-        'max_risk': 30000,
+        'max_risk': 200000,
         'current_risk': 0,
         'price_precision': 0.5,
         'price_decimals': 1,
@@ -163,23 +163,23 @@ class Trading(Link):
       },
       'ETHUSD' : {
         'sym': 'ETHUSD',
-        'grid_size': 100,
+        'grid_size': 5,
         'candles': {},
         'tob': (np.nan, np.nan),
-        'max_risk': 0,
+        'max_risk': 5*100,
         'current_risk': 0,
         'price_precision': 0.05,
         'price_decimals': 2,
-        'direction': 'LONG',
+        'direction': 'FLAT',
 		'macd': np.nan,
 		'mode': 'GRID'
       },
       'LINKUSD' : {
         'sym': 'LINKUSD',
-        'grid_size': 200,
+        'grid_size': 50,
         'candles': {},
         'tob': (np.nan, np.nan),
-        'max_risk': 0,
+        'max_risk': 50*100,
         'current_risk': 0,
         'price_precision': 0.001,
         'price_decimals': 3,
@@ -189,10 +189,10 @@ class Trading(Link):
       },
       'XRPUSD': {
         'sym': 'XRPUSD',
-        'grid_size': 100,
+        'grid_size': 20,
         'candles': {},
         'tob': (np.nan, np.nan),
-        'max_risk': 0,
+        'max_risk': 20*100,
         'current_risk': 0,
         'price_precision': 0.0001,
         'price_decimals': 4,
@@ -303,39 +303,112 @@ class Trading(Link):
   def compute_mode(self, sym):
 	previous_macd = sym['macd']
 	self.update_signal(sym)
-	logger.info(sym['sym']+': prev: ' + str(round(previous_macd, 4)) + ' curr: ' + str(round(sym['macd'], 4)))
 
 	if(np.isnan(previous_macd)):
 	  return
 
 	if(np.greater(sym['macd'], 4) and np.greater(sym['macd'], previous_macd)):
 	  sym['mode'] = 'TAKER_LONG'
-	  logger.info('TAKER_LONG')
     elif(np.greater(-4, sym['macd']) and sym['macd'] < previous_macd):
 	  sym['mode'] = 'TAKER_SHORT'
-	  logger.info('TAKER_SHORT')
 	elif(sym['mode'] == 'TAKER_LONG' and sym['macd'] < previous_macd):
 	  sym['mode'] = 'REDUCE_SHORT'
-	  logger.info('REDUCE')
 	elif(sym['mode'] == 'TAKER_SHORT' and sym['macd'] > previous_macd):
 	  sym['mode'] = 'REDUCE_LONG'
-	  logger.info('REDUCE')
 	elif((sym['mode'] == 'REDUCE_SHORT' or sym['mode'] == 'REDUCE_LONG') and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -4 and sym['macd'] < 4))):
 	  sym['mode'] = 'GRID'
-	  logger.info('grid')
 
 
   async def trade(self):
 	for venue in self.VENUES:
       for sym in self.VENUES[venue]:
 		self.compute_mode(self.VENUES[venue][sym])
+        logger.info(sym + ': mode: ' + self.VENUES[venue][sym]['mode'])
 		if(self.VENUES[venue][sym]['mode'] == 'GRID'):
 		  await self.update_limit_orders(venue, sym)
 	      await asyncio.sleep(3)
-		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG'):
+		elif(self.VENUES[venue][sym]['mode'] == 'TAKER_LONG'):
 			await self.taker_long_orders(venue, sym)
-		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT'):
+		elif(self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT'):
 			await self.taker_short_orders(venue, sym)
+		elif(self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT'):
+			await self.taker_reduce_short_orders(venue, sym)
+		elif(self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG'):
+			await self.taker_reduce_long_orders(venue, sym)
+
+  async def taker_reduce_long_orders(self, venue, sym):
+	tob_bid, tob_ask = self.VENUES[venue][sym]['tob']
+    if(np.isnan(tob_bid) or np.isnan(tob_ask)):
+      return
+	self.cancel_order(venue, sym=sym)
+	side = 'Buy'
+
+    if (self.VENUES[venue][sym]['current_risk'] <= 0):
+	  # If taker_long, then market buy one and place a tob other
+	  self.call_endpoint(
+        venue,
+        'order',
+        'private',
+        method='POST', params={
+          'symbol': sym,
+          'side': 'Buy',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
+          'ordType': 'Market',
+          'text': 'Sent from ProfitView.net'
+        }
+	  )
+
+	  self.call_endpoint(
+        venue,
+        'order',
+        'private',
+        method='POST', params={
+          'symbol': sym,
+          'side': 'Buy',
+          'price': tob_bid,
+          'ordType': 'Limit',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
+          'execInst': 'ParticipateDoNotInitiate',
+          'text': 'Sent from ProfitView.net'
+        }
+	  )
+
+  async def taker_reduce_short_orders(self, venue, sym):
+	tob_bid, tob_ask = self.VENUES[venue][sym]['tob']
+    if(np.isnan(tob_bid) or np.isnan(tob_ask)):
+      return
+	self.cancel_order(venue, sym=sym)
+	side = 'Buy'
+
+    if (self.VENUES[venue][sym]['current_risk'] >= 0):
+	  # If taker_long, then market buy one and place a tob other
+	  self.call_endpoint(
+        venue,
+        'order',
+        'private',
+        method='POST', params={
+          'symbol': sym,
+          'side': 'Sell',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
+          'ordType': 'Market',
+          'text': 'Sent from ProfitView.net'
+        }
+	  )
+
+	  self.call_endpoint(
+        venue,
+        'order',
+        'private',
+        method='POST', params={
+          'symbol': sym,
+          'side': 'Sell',
+          'price': tob_bid,
+          'ordType': 'Limit',
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
+          'execInst': 'ParticipateDoNotInitiate',
+          'text': 'Sent from ProfitView.net'
+        }
+	  )
 
   async def taker_long_orders(self, venue, sym):
 	tob_bid, tob_ask = self.VENUES[venue][sym]['tob']
@@ -351,7 +424,7 @@ class Trading(Link):
         method='POST', params={
           'symbol': sym,
           'side': 'Buy',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
           'ordType': 'Market',
           'text': 'Sent from ProfitView.net'
         }
@@ -366,7 +439,7 @@ class Trading(Link):
           'side': 'Buy',
           'price': tob_bid,
           'ordType': 'Limit',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
@@ -387,7 +460,7 @@ class Trading(Link):
           'symbol': sym,
           'side': 'Sell',
           'ordType': 'Market',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
           'text': 'Sent from ProfitView.net'
         }
 	  )
@@ -401,7 +474,7 @@ class Trading(Link):
           'side': 'Sell',
           'price': tob_ask,
           'ordType': 'Limit',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 2,
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
