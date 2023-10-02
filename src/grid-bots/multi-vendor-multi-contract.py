@@ -1,4 +1,4 @@
-# 2023-10-02 12:48:12
+# 2023-10-02 18:06:09
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
 
@@ -11,7 +11,7 @@ from profitview import Link, http, logger
 
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d #, CubicSpline
 from talib import RSI, MACD
 
 TIME_LOOKUP = {
@@ -48,6 +48,8 @@ def debounce(wait):
     return debounced
   return decorator
 
+# MODES: TAKER_LONG | REDUCE_SHORT | REDUCE_LONG | TAKER_SHORT | GRID | TOB
+
 class Trading(Link):
   ACTIVE = True
   UPDATE_SECONDS = 60
@@ -56,8 +58,10 @@ class Trading(Link):
   GRID_BIDS = (40, 30, 20) # (40, 30, 20, 10)
   GRID_ASKS = (60, 70, 80) # (60, 70, 80, 90)
   LOOKBACK = 150
-  MACD_RANGE = 15
+  MACD_RANGE = 4
+  CUBIC_N = 40
   LEVEL = '1m'
+  TAKER_MULTIPLIER = 5
   SRC = 'bitmex'                         # exchange name as in the Glossary
   MAIN_VENUE='account1'
   VENUES = {
@@ -70,7 +74,7 @@ class Trading(Link):
           'size_precision': 1_000,
           'direction': 'FLAT',
           'multiplier': 1,
-          'mode' : 'GRID', # 'TOB'
+          'mode' : 'GRID',
           'tob_is_bid' : False,
         },
         'XBTUSD' : {
@@ -252,7 +256,7 @@ class Trading(Link):
   # * If there are existing orders, they get amended ( faster call )
   # * If there are more prices than available orders, new orders get created
   # * If there are more available orders than prices, the excess orders get deleted
-  def limit_orders(self, is_bid, venue, sym, tob, prices) :
+  def limit_orders(self, is_bid, venue, sym, tob, prices, size_multiplier = 1) :
     key = 'bid' if is_bid else 'ask'
     sign = 1 if is_bid else -1
     side = 'Buy' if is_bid else 'Sell'
@@ -361,7 +365,7 @@ class Trading(Link):
                       }
                     )
                     if response["error"] is not None :
-                      if ('Filled' in response['error']) or ('Canceled' in response['error']):
+                      if ('Filled' in response['error']) or ('Canceled' in response['error']) or ('Invalid orderID' in response['error']):
                         del orders[order_id]
                         break
                       logger.error(f"PUT order {response['error']}")
@@ -372,7 +376,7 @@ class Trading(Link):
                   prices.remove(price)
                   del orders[order_id]
                 except Exception as e:
-                  if ('Filled' in str(e)) or ('Canceled' in str(e)):
+                  if ('Filled' in str(e)) or ('Canceled' in str(e)) or ('Invalid orderID' in str(e)):
                     del orders[order_id]
                     break
                   logger.error(f"PUT order {e}")
@@ -388,7 +392,7 @@ class Trading(Link):
             # In reduce only, we don't want to send an order that would put the risk in the wrong direction
             # * They get cancelled anyway
             if reduce_only :
-              if (sign * int(reduce_size + sign * sym['order_size'] * multiplier)) > 0 :
+              if (sign * int(reduce_size + sign * sym['order_size'] * multiplier * size_multiplier)) > 0 :
                 break
             for attempt in range(10):
               try:
@@ -401,7 +405,7 @@ class Trading(Link):
                     params = {
                       'symbol': sym['sym'],
                       'side': side,
-                      'orderQty': sym['order_size'] * multiplier,
+                      'orderQty': sym['order_size'] * multiplier * size_multiplier,
                       'price': price,
                       'ordType': 'Limit',
                       'execInst': execInst,
@@ -414,7 +418,7 @@ class Trading(Link):
                     continue
                   if attempt > 0 :
                     logger.info(f"POST order success after {attempt=}")
-                reduce_size = round(reduce_size + sign * sym['order_size'] * multiplier, 1)
+                reduce_size = round(reduce_size + sign * sym['order_size'] * multiplier * size_multiplier, 1)
               except Exception as e:
                 logger.error(f"POST order {e}")
                 time.sleep(0.5)
@@ -452,7 +456,7 @@ class Trading(Link):
               else:
                 break
 
-  def taker_order(self, is_bid, venue, sym, price) :
+  def taker_order(self, is_bid, venue, sym, price, size_multiplier = 1) :
     sign = 1 if is_bid else -1
     side = 'Buy' if is_bid else 'Sell'
 
@@ -468,7 +472,7 @@ class Trading(Link):
               params = {
                 'symbol': sym['sym'],
                 'side': side,
-                'orderQty': sym['order_size'],
+                'orderQty': sym['order_size'] * size_multiplier,
                 'ordType': 'Market',
                 'text': 'Sent from ProfitView.net'
               }
@@ -485,7 +489,7 @@ class Trading(Link):
         else:
           break
 
-      self.limit_orders( is_bid=is_bid, venue=venue, sym=sym, tob=price, prices=[price])
+      self.limit_orders( is_bid=is_bid, venue=venue, sym=sym, tob=price, prices=[price], size_multiplier=size_multiplier)
 
   async def trade(self):
     for venue in self.VENUES:
@@ -497,14 +501,14 @@ class Trading(Link):
         if self.VENUES[venue][sym]['mode'] == 'GRID' :
           await self.update_limit_orders(venue, self.VENUES[venue][sym])
           await asyncio.sleep(1)
-        elif (self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] < 0) :
+        elif (self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or (self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG' and self.VENUES[venue][sym]['current_risk'] < 0) :
           if np.isnan(tob_bid) :
             continue
-          self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid )
-        elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] > 0)):
+          self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid, size_multiplier=self.TAKER_MULTIPLIER )
+        elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or (self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT' and self.VENUES[venue][sym]['current_risk'] > 0)):
           if np.isnan(tob_ask) :
             continue
-          self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask )
+          self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask, size_multiplier=self.TAKER_MULTIPLIER )
 
   async def update_limit_orders(self, venue, sym):
     tob_bid, tob_ask =  sym['tob']
@@ -587,34 +591,39 @@ class Trading(Link):
     return self.candle_bin(self.epoch_now, self.LEVEL)
 
   def last_closes(self, sym):
-    start_time = self.time_bin_now - self.LOOKBACK * 60_000
-    times = [start_time + (i + 1) * 60_000 for i in range(self.LOOKBACK)]
+    start_time = self.time_bin_now - self.LOOKBACK * self.time_step
+    times = [start_time + (i + 1) * self.time_step for i in range(self.LOOKBACK)]
     closes = [sym['candles'].get(x, np.nan) for x in times]
     return np.array(pd.Series(closes).ffill())
 
   def update_signal(self, sym):
     last_closes = self.last_closes(sym)
     macd, signal, hist = MACD(last_closes)
-    sym['macd'] = (hist[-1]/np.mean(last_closes)) * 100
+    sym['macd'] = (hist[-1]/np.mean(last_closes)) * 10000
+    # try:
+    #   cubic = CubicSpline(range(self.CUBIC_N), hist[-self.CUBIC_N:])
+    #   sym['macd'] = float(cubic(self.CUBIC_N-1, 1))
+    # except Exception as e:
+    #   logger.error(f'unable to update signal - {e}', exc_info=True)
 
   def compute_mode(self, sym):
     if sym['mode'] == 'TOB' :
       return
     previous_macd = sym['macd']
     self.update_signal(sym)
-    logger.info(sym['sym'] + ' prev: ' + str(previous_macd) + ' curr: ' + str(sym['macd']))
+    logger.info(sym['sym'] + ': prev: ' + str(round(previous_macd, 4)) + ' curr: ' + str(round(sym['macd'], 4)))
     if np.isnan(previous_macd) :
       return
 
-    if np.greater(sym['macd'], self.MACD_RANGE) and np.greater(sym['macd'], previous_macd) :
+    if (sym['macd'] > self.MACD_RANGE) and (sym['macd'] > previous_macd) :
       sym['mode'] = 'TAKER_LONG'
-    elif np.greater(-self.MACD_RANGE, sym['macd']) and (sym['macd'] < previous_macd) :
+    elif (sym['macd'] < -self.MACD_RANGE) and (sym['macd'] < previous_macd) :
       sym['mode'] = 'TAKER_SHORT'
     elif sym['mode'] == 'TAKER_LONG' and (sym['macd'] < previous_macd) :
-      sym['mode'] = 'REDUCE'
+      sym['mode'] = 'REDUCE_SHORT'
     elif sym['mode'] == 'TAKER_SHORT' and (sym['macd'] > previous_macd) :
-      sym['mode'] = 'REDUCE'
-    elif sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['order_size'] or (sym['macd'] > -self.MACD_RANGE and sym['macd'] < self.MACD_RANGE)) :
+      sym['mode'] = 'REDUCE_LONG'
+    elif (sym['mode'] == 'REDUCE_SHORT' or sym['mode'] == 'REDUCE_LONG') and (abs(sym['current_risk']) <= sym['order_size'] or (sym['macd'] > -self.MACD_RANGE and sym['macd'] < self.MACD_RANGE)) :
       sym['mode'] = 'GRID'
 
   def trade_update(self, src, sym, data):
