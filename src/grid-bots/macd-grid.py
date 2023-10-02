@@ -298,20 +298,20 @@ class Trading(Link):
 
   def update_signal(self, sym):
       macd, signal, hist = talib.MACD(self.last_closes(sym))
-      sym['macd'] = hist[-1]
+	  sym['macd'] = hist[-1] / self.last_closes(sym)[-1] * 100
 
   def compute_mode(self, sym):
 	previous_macd = sym['macd']
 	self.update_signal(sym)
-	logger.info('prev: ' + str(previous_macd) + ' curr: ' + str(sym['macd']))
+	logger.info(sym['sym']+': prev: ' + str(round(previous_macd, 4)) + ' curr: ' + str(round(sym['macd'], 4)))
 
 	if(np.isnan(previous_macd)):
 	  return
 
-	if(np.greater(sym['macd'], 15) and np.greater(sym['macd'], previous_macd)):
+	if(np.greater(sym['macd'], 0.1) and np.greater(sym['macd'], previous_macd)):
 	  sym['mode'] = 'TAKER_LONG'
 	  logger.info('TAKER_LONG')
-    elif(np.greater(-15, sym['macd']) and sym['macd'] < previous_macd):
+    elif(np.greater(-0.1, sym['macd']) and sym['macd'] < previous_macd):
 	  sym['mode'] = 'TAKER_SHORT'
 	  logger.info('TAKER_SHORT')
 	elif(sym['mode'] == 'TAKER_LONG' and sym['macd'] < previous_macd):
@@ -320,7 +320,7 @@ class Trading(Link):
 	elif(sym['mode'] == 'TAKER_SHORT' and sym['macd'] > previous_macd):
 	  sym['mode'] = 'REDUCE'
 	  logger.info('REDUCE')
-	elif(sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -15 and sym['macd'] < 15))):
+	elif(sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -0.1 and sym['macd'] < 0.1))):
 	  sym['mode'] = 'GRID'
 	  logger.info('grid')
 
