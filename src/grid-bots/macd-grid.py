@@ -14,7 +14,7 @@ from talib import RSI
 import asyncio
 import time
 
-#MODES: LONG_TAKER | REDUCE_MODE | SHORT_TAKER | GRID
+#MODES: TAKER_LONG | REDUCE_SHORT | REDUCE_LONG | TAKER_SHORT | GRID
 
 
 class Trading(Link):
@@ -298,7 +298,7 @@ class Trading(Link):
 
   def update_signal(self, sym):
       macd, signal, hist = talib.MACD(self.last_closes(sym))
-	  sym['macd'] = hist[-1] / self.last_closes(sym)[-1] * 100
+	  sym['macd'] = hist[-1] / self.last_closes(sym)[-1] * 10000
 
   def compute_mode(self, sym):
 	previous_macd = sym['macd']
@@ -308,19 +308,19 @@ class Trading(Link):
 	if(np.isnan(previous_macd)):
 	  return
 
-	if(np.greater(sym['macd'], 0.1) and np.greater(sym['macd'], previous_macd)):
+	if(np.greater(sym['macd'], 4) and np.greater(sym['macd'], previous_macd)):
 	  sym['mode'] = 'TAKER_LONG'
 	  logger.info('TAKER_LONG')
-    elif(np.greater(-0.1, sym['macd']) and sym['macd'] < previous_macd):
+    elif(np.greater(-4, sym['macd']) and sym['macd'] < previous_macd):
 	  sym['mode'] = 'TAKER_SHORT'
 	  logger.info('TAKER_SHORT')
 	elif(sym['mode'] == 'TAKER_LONG' and sym['macd'] < previous_macd):
-	  sym['mode'] = 'REDUCE'
+	  sym['mode'] = 'REDUCE_SHORT'
 	  logger.info('REDUCE')
 	elif(sym['mode'] == 'TAKER_SHORT' and sym['macd'] > previous_macd):
-	  sym['mode'] = 'REDUCE'
+	  sym['mode'] = 'REDUCE_LONG'
 	  logger.info('REDUCE')
-	elif(sym['mode'] == 'REDUCE' and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -0.1 and sym['macd'] < 0.1))):
+	elif((sym['mode'] == 'REDUCE_SHORT' or sym['mode'] == 'REDUCE_LONG') and (abs(sym['current_risk']) <= sym['grid_size'] or (sym['macd'] > -4 and sym['macd'] < 4))):
 	  sym['mode'] = 'GRID'
 	  logger.info('grid')
 
@@ -329,13 +329,12 @@ class Trading(Link):
 	for venue in self.VENUES:
       for sym in self.VENUES[venue]:
 		self.compute_mode(self.VENUES[venue][sym])
-		logger.info("Mode: " + self.VENUES[venue][sym]['mode'])
 		if(self.VENUES[venue][sym]['mode'] == 'GRID'):
 		  await self.update_limit_orders(venue, sym)
 	      await asyncio.sleep(3)
-		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] < 0)):
+		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG'):
 			await self.taker_long_orders(venue, sym)
-		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or (self.VENUES[venue][sym]['mode'] == 'REDUCE' and self.VENUES[venue][sym]['current_risk'] > 0)):
+		elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT'):
 			await self.taker_short_orders(venue, sym)
 
   async def taker_long_orders(self, venue, sym):
@@ -352,7 +351,7 @@ class Trading(Link):
         method='POST', params={
           'symbol': sym,
           'side': 'Buy',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'],
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
           'ordType': 'Market',
           'text': 'Sent from ProfitView.net'
         }
@@ -367,7 +366,7 @@ class Trading(Link):
           'side': 'Buy',
           'price': tob_bid,
           'ordType': 'Limit',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'],
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
@@ -388,7 +387,7 @@ class Trading(Link):
           'symbol': sym,
           'side': 'Sell',
           'ordType': 'Market',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'],
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
           'text': 'Sent from ProfitView.net'
         }
 	  )
@@ -402,7 +401,7 @@ class Trading(Link):
           'side': 'Sell',
           'price': tob_ask,
           'ordType': 'Limit',
-		  'orderQty': self.VENUES[venue][sym]['grid_size'],
+		  'orderQty': self.VENUES[venue][sym]['grid_size'] * 5,
           'execInst': 'ParticipateDoNotInitiate',
           'text': 'Sent from ProfitView.net'
         }
