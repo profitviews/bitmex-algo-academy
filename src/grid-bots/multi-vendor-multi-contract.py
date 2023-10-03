@@ -168,7 +168,6 @@ class Trading(Link):
         candles = self.fetch_candles(self.MAIN_VENUE, sym, level=self.LEVEL)
         self.VENUES[venue][sym]['candles'] = {x['time']: x['close'] for x in candles['data']} | self.VENUES[venue][sym]['candles']
 
-    self.fetch_current_risk()
     self.INIT_COMPLETE = True
     asyncio.run(self.minutely_update())
 
