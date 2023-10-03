@@ -1,4 +1,4 @@
-# 2023-10-02 18:06:09
+# 2023-10-03 14:31:00
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
 
@@ -61,7 +61,8 @@ class Trading(Link):
   MACD_RANGE = 4
   CUBIC_N = 40
   LEVEL = '1m'
-  TAKER_MULTIPLIER = 5
+  ORDER_MULTIPLIER = 5
+  REDUCE_TAKER = False
   SRC = 'bitmex'                         # exchange name as in the Glossary
   MAIN_VENUE='account1'
   VENUES = {
@@ -89,8 +90,8 @@ class Trading(Link):
           'tob_is_bid' : True,
         },
         'ETHUSD' : {
-          'order_size': 20,
-          'max_risk': 20*20,
+          'order_size': 5,
+          'max_risk': 5*100,
           'price_precision': 0.05,
           'size_precision': 1,
           'direction': 'FLAT',
@@ -175,6 +176,7 @@ class Trading(Link):
     return RSI(np.append(closes, [closes[-1] * (1 + ret)]))[-1]
 
   async def minutely_update(self):
+    self.fetch = asyncio.create_task(self.fetch_current_risk())
     while True :
       try :
         await self.trade()
@@ -199,22 +201,31 @@ class Trading(Link):
       orders = self.VENUES[venue][sym]['orders']
       logger.info(f'{venue} - {sym} current risk: {current_risk} {current_risk_type}, orders: {orders}')
 
-  def fetch_current_risk(self):
-    for venue in self.VENUES:
-      positions=self.fetch_positions(venue)
-      if positions :
-        for x in positions['data']:
-          if x['sym'] in self.VENUES[venue]:
-            self.VENUES[venue][x['sym']]['current_risk'] = x['pos_size']
+  async def fetch_current_risk(self):
+    while True :
+      # Clear orders, sometimes there is a bad state in bitmex and/or profitview
+      for venue in self.VENUES:
+        for sym in self.VENUES[venue]:
+          self.cancel_order(venue, sym=sym)
+          self.VENUES[venue][sym]['orders'] = {'bid':{}, 'ask':{}}
 
-      orders=self.fetch_open_orders(venue)
-      if orders :
-        for x in orders['data']:
-          if x['sym'] in self.VENUES[venue]:
-            key = 'bid' if x['side'] == 'Buy' else 'ask'
-            self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
+      for venue in self.VENUES:
+        positions=self.fetch_positions(venue)
+        if positions :
+          for x in positions['data']:
+            if x['sym'] in self.VENUES[venue]:
+              self.VENUES[venue][x['sym']]['current_risk'] = x['pos_size']
 
-      # self.log_current_risk(venue)
+        orders=self.fetch_open_orders(venue)
+        if orders :
+          for x in orders['data']:
+            if x['sym'] in self.VENUES[venue]:
+              key = 'bid' if x['side'] == 'Buy' else 'ask'
+              self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
+
+        self.log_current_risk(venue)
+      # Every 30m
+      await asyncio.sleep(30*60)
 
   def remove_duplicates(self, arr):
     unique_items = list(set(arr))
@@ -365,7 +376,7 @@ class Trading(Link):
                       }
                     )
                     if response["error"] is not None :
-                      if ('Filled' in response['error']) or ('Canceled' in response['error']) or ('Invalid orderID' in response['error']):
+                      if ('Filled' in response['error']) or ('Canceled' in response['error']) or ('Invalid orderID' in response['error']) or ('Invalid amend' in response['error']):
                         del orders[order_id]
                         break
                       logger.error(f"PUT order {response['error']}")
@@ -376,7 +387,7 @@ class Trading(Link):
                   prices.remove(price)
                   del orders[order_id]
                 except Exception as e:
-                  if ('Filled' in str(e)) or ('Canceled' in str(e)) or ('Invalid orderID' in str(e)):
+                  if ('Filled' in str(e)) or ('Canceled' in str(e)) or ('Invalid orderID' in str(e)) or ('Invalid amend' in str(e)):
                     del orders[order_id]
                     break
                   logger.error(f"PUT order {e}")
@@ -495,20 +506,34 @@ class Trading(Link):
     for venue in self.VENUES:
       for sym in self.VENUES[venue]:
         self.compute_mode(self.VENUES[venue][sym])
-        logger.info(f'sym: {self.VENUES[venue][sym]["sym"]} {self.VENUES[venue][sym]["mode"]}')
+        logger.info(f'sym: {sym} {self.VENUES[venue][sym]["mode"]}')
         tob_bid, tob_ask =  self.VENUES[venue][sym]['tob']
 
         if self.VENUES[venue][sym]['mode'] == 'GRID' :
           await self.update_limit_orders(venue, self.VENUES[venue][sym])
           await asyncio.sleep(1)
-        elif (self.VENUES[venue][sym]['mode'] == 'TAKER_LONG') or (self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG' and self.VENUES[venue][sym]['current_risk'] < 0) :
+        elif self.VENUES[venue][sym]['mode'] == 'TAKER_LONG' :
           if np.isnan(tob_bid) :
             continue
-          self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid, size_multiplier=self.TAKER_MULTIPLIER )
-        elif((self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT') or (self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT' and self.VENUES[venue][sym]['current_risk'] > 0)):
+          self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid, size_multiplier=self.ORDER_MULTIPLIER )
+        elif self.VENUES[venue][sym]['mode'] == 'REDUCE_LONG' and self.VENUES[venue][sym]['current_risk'] < 0 :
+          if np.isnan(tob_bid) :
+            continue
+          if self.REDUCE_TAKER :
+            self.taker_order(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], price=tob_bid, size_multiplier=self.ORDER_MULTIPLIER )
+          else :
+            self.limit_orders(is_bid=True, venue=venue, sym=self.VENUES[venue][sym], tob=tob_bid, prices=[tob_bid], size_multiplier=self.ORDER_MULTIPLIER )
+        elif self.VENUES[venue][sym]['mode'] == 'TAKER_SHORT' :
           if np.isnan(tob_ask) :
             continue
-          self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask, size_multiplier=self.TAKER_MULTIPLIER )
+          self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask, size_multiplier=self.ORDER_MULTIPLIER )
+        elif self.VENUES[venue][sym]['mode'] == 'REDUCE_SHORT' and self.VENUES[venue][sym]['current_risk'] > 0 :
+          if np.isnan(tob_ask) :
+            continue
+          if self.REDUCE_TAKER :
+            self.taker_order(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], price=tob_ask, size_multiplier=self.ORDER_MULTIPLIER )
+          else :
+            self.limit_orders(is_bid=False, venue=venue, sym=self.VENUES[venue][sym], tob=tob_ask, prices=[tob_ask], size_multiplier=self.ORDER_MULTIPLIER )
 
   async def update_limit_orders(self, venue, sym):
     tob_bid, tob_ask =  sym['tob']
@@ -599,7 +624,7 @@ class Trading(Link):
   def update_signal(self, sym):
     last_closes = self.last_closes(sym)
     macd, signal, hist = MACD(last_closes)
-    sym['macd'] = (hist[-1]/np.mean(last_closes)) * 10000
+    sym['macd'] = (hist[-1]/np.nanmean(last_closes)) * 10000
     # try:
     #   cubic = CubicSpline(range(self.CUBIC_N), hist[-self.CUBIC_N:])
     #   sym['macd'] = float(cubic(self.CUBIC_N-1, 1))
