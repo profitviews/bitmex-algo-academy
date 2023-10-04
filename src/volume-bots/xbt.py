@@ -87,7 +87,7 @@ class Trading(Link):
 
     def update_limit_orders(self):
 		xbttob_bid, xbttob_ask = self.XBTUSD['tob']
-		usdttob_bid, usdttob_ask = self.XBTUSD['tob']
+		usdttob_bid, usdttob_ask = self.XBTUSDT['tob']
 		if(np.isnan(usdttob_bid) or np.isnan(usdttob_ask) or np.isnan(xbttob_bid) or np.isnan(xbttob_ask)):
 			return
 
