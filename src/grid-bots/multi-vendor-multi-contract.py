@@ -1,4 +1,4 @@
-# 2023-10-03 14:31:00
+# 2023-10-04 04:32:55
 # Note: this file is to be used within profitview.net/trading/bots
 # pylint: disable=locally-disabled, import-self, import-error, missing-class-docstring, invalid-name, consider-using-dict-items, broad-except
 
@@ -58,13 +58,14 @@ class Trading(Link):
   GRID_BIDS = (40, 30, 20) # (40, 30, 20, 10)
   GRID_ASKS = (60, 70, 80) # (60, 70, 80, 90)
   LOOKBACK = 150
-  MACD_RANGE = 4
+  MACD_RANGE = 6
   CUBIC_N = 40
   LEVEL = '1m'
-  ORDER_MULTIPLIER = 5
+  ORDER_MULTIPLIER = 2
   REDUCE_TAKER = False
   SRC = 'bitmex'                         # exchange name as in the Glossary
   MAIN_VENUE='account1'
+  ALWAYS_FETCH = False
   VENUES = {
       'account1': {
         'XBTUSDT' : {
@@ -178,6 +179,8 @@ class Trading(Link):
     self.fetch = asyncio.create_task(self.fetch_current_risk())
     while True :
       try :
+        if self.ALWAYS_FETCH :
+          await self._fetch_current_risk(cancel=False, log=False)
         await self.trade()
       except asyncio.CancelledError:
         break
@@ -200,29 +203,34 @@ class Trading(Link):
       orders = self.VENUES[venue][sym]['orders']
       logger.info(f'{venue} - {sym} current risk: {current_risk} {current_risk_type}, orders: {orders}')
 
-  async def fetch_current_risk(self):
-    while True :
-      # Clear orders, sometimes there is a bad state in bitmex and/or profitview
+  async def _fetch_current_risk(self, cancel=True, log=True):
+    # Clear orders, sometimes there is a bad state in bitmex and/or profitview
+    if cancel :
       for venue in self.VENUES:
         for sym in self.VENUES[venue]:
           self.cancel_order(venue, sym=sym)
           self.VENUES[venue][sym]['orders'] = {'bid':{}, 'ask':{}}
 
-      for venue in self.VENUES:
-        positions=self.fetch_positions(venue)
-        if positions :
-          for x in positions['data']:
-            if x['sym'] in self.VENUES[venue]:
-              self.VENUES[venue][x['sym']]['current_risk'] = x['pos_size']
+    for venue in self.VENUES:
+      positions=self.fetch_positions(venue)
+      if positions :
+        for x in positions['data']:
+          if x['sym'] in self.VENUES[venue]:
+            self.VENUES[venue][x['sym']]['current_risk'] = x['pos_size']
 
-        orders=self.fetch_open_orders(venue)
-        if orders :
-          for x in orders['data']:
-            if x['sym'] in self.VENUES[venue]:
-              key = 'bid' if x['side'] == 'Buy' else 'ask'
-              self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
+      orders=self.fetch_open_orders(venue)
+      if orders :
+        for x in orders['data']:
+          if x['sym'] in self.VENUES[venue]:
+            key = 'bid' if x['side'] == 'Buy' else 'ask'
+            self.VENUES[venue][x['sym']]['orders'][key][x['order_id']] = x
 
+      if log:
         self.log_current_risk(venue)
+
+  async def fetch_current_risk(self):
+    while True :
+      await self._fetch_current_risk()
       # Every 30m
       await asyncio.sleep(30*60)
 
@@ -674,6 +682,7 @@ class Trading(Link):
     if not self.INIT_COMPLETE :
       return
     venue = data['venue']
+    # logger.info(f'{venue=}')
     key = 'bid' if data['side'] == 'Buy' else 'ask'
     if venue in self.VENUES :
       if sym in self.VENUES[venue]:
