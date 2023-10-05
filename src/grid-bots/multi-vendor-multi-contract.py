@@ -15,6 +15,7 @@ import asyncio
 import time
 
 class Trading(Link):
+  ACTIVE = False
   UPDATE_SECONDS = 60
   MULTIPLIER = 1
   SHUT_IT_DOWN = False
@@ -251,21 +252,22 @@ class Trading(Link):
               bid = tob_bid
               execInst = 'Close'
 
-            try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method='POST', params={
-                  'symbol': sym,
-                  'side': 'Buy',
-                  'price': bid,
-                  'ordType': 'Limit',
-                  'execInst': execInst,
-                  'text': 'Sent from ProfitView.net'
-                })
-            except Exception as e:
-              logger.error(e)
+            if self.ACTIVE:
+              try:
+                self.call_endpoint(
+                  venue,
+                  'order',
+                  'private',
+                  method='POST', params={
+                    'symbol': sym,
+                    'side': 'Buy',
+                    'price': bid,
+                    'ordType': 'Limit',
+                    'execInst': execInst,
+                    'text': 'Sent from ProfitView.net'
+                  })
+              except Exception as e:
+                logger.error(e)
           else :
             # If I have a current open position in the opposite direction, double the order size
             multiplier = 1
@@ -276,24 +278,25 @@ class Trading(Link):
             else:
               execInst = 'ParticipateDoNotInitiate'
             for bid in bids:
-              try:
-                self.call_endpoint(
-                  venue,
-                  'order',
-                  'private',
-                  method = 'POST',
-                  params = {
-                    'symbol': sym,
-                    'side': 'Buy',
-                    'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
-                    'price': bid,
-                    'ordType': 'Limit',
-                    'execInst': execInst,
-                    'text': 'Sent from ProfitView.net'
-                  }
-                )
-              except Exception as e:
-                logger.error(e)
+              if self.ACTIVE:
+                try:
+                  self.call_endpoint(
+                    venue,
+                    'order',
+                    'private',
+                    method = 'POST',
+                    params = {
+                      'symbol': sym,
+                      'side': 'Buy',
+                      'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
+                      'price': bid,
+                      'ordType': 'Limit',
+                      'execInst': execInst,
+                      'text': 'Sent from ProfitView.net'
+                    }
+                  )
+                except Exception as e:
+                  logger.error(e)
 
         # Sell orders
         if (abs(self.VENUES[venue][sym]['current_risk']) <  self.VENUES[venue][sym]['max_risk']) or (self.VENUES[venue][sym]['current_risk'] >= 0):
@@ -304,22 +307,22 @@ class Trading(Link):
             else :
               bid = tob_ask
               execInst = 'Close'
-
-            try:
-              self.call_endpoint(
-                venue,
-                'order',
-                'private',
-                method='POST', params={
-                  'symbol': sym,
-                  'side': 'Sell',
-                  'price': bid,
-                  'ordType': 'Limit',
-                  'execInst': execInst,
-                  'text': 'Sent from ProfitView.net'
-                })
-            except Exception as e:
-              logger.error(e)
+            if self.ACTIVE:
+              try:
+                self.call_endpoint(
+                  venue,
+                  'order',
+                  'private',
+                  method='POST', params={
+                    'symbol': sym,
+                    'side': 'Sell',
+                    'price': bid,
+                    'ordType': 'Limit',
+                    'execInst': execInst,
+                    'text': 'Sent from ProfitView.net'
+                  })
+              except Exception as e:
+                logger.error(e)
           else :
             # If I have a current open position in the opposite direction, double the order size
             multiplier = 1
@@ -330,22 +333,23 @@ class Trading(Link):
             else:
               execInst = 'ParticipateDoNotInitiate'
             for ask in asks:
-              try:
-                self.call_endpoint(
-                  venue,
-                  'order',
-                  'private',
-                  method='POST', params={
-                    'symbol': sym,
-                    'side': 'Sell',
-                    'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
-                    'price': ask,
-                    'ordType': 'Limit',
-                    'execInst': execInst,
-                    'text': 'Sent from ProfitView.net'
-                  })
-              except Exception as e:
-                logger.error(e)
+              if self.ACTIVE:
+                try:
+                  self.call_endpoint(
+                    venue,
+                    'order',
+                    'private',
+                    method='POST', params={
+                      'symbol': sym,
+                      'side': 'Sell',
+                      'orderQty': self.VENUES[venue][sym]['grid_size'] * multiplier,
+                      'price': ask,
+                      'ordType': 'Limit',
+                      'execInst': execInst,
+                      'text': 'Sent from ProfitView.net'
+                    })
+                except Exception as e:
+                  logger.error(e)
 
         await asyncio.sleep(3)
 
@@ -359,3 +363,31 @@ class Trading(Link):
     for venue in self.VENUES:
       if sym in self.VENUES[venue]:
         self.VENUES[venue][sym]['tob'] = (data['bid'][0], data['ask'][0])
+
+  @http.route
+  def get_button(self, data):
+    logger.info(("get_button", data))
+    return "get_button"
+
+  @http.route
+  def post_button(self, data):
+    logger.info("post_button")
+    logger.info(f"UPDATE_SECONDS - before: {self.UPDATE_SECONDS}")
+    logger.info(f"GRID_BIDS - before: {self.GRID_BIDS}")
+    output = []
+    for (p, v) in data.items():
+      v = v.strip()
+      if v[0]+v[-1] == '()':  # eg GRID_BIDS int tuple as string
+        v = tuple(int(c.strip()) for c in v[1:-1].split(','))
+      setattr(self, p, v)  # No validation!
+      output.append([p, v])			
+    logger.info(f"UPDATE_SECONDS - after: {self.UPDATE_SECONDS}")
+    logger.info(f"GRID_BIDS - after: {self.GRID_BIDS}")
+    return output  # Just returning what's passed as an example
+
+  @http.route
+  def get_toggle_bot(self, data):  # Possibly toggle order entry
+    self.ACTIVE = not self.ACTIVE
+    logger.info("Active" if self.ACTIVE else "Inactive")
+    return "get_toggle_bot"
+
